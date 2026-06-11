@@ -1,0 +1,9 @@
+[package]
+name = "elderforge-platform"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+winit = { workspace = true }
+log = { workspace = true }
+thiserror = { workspace = true }

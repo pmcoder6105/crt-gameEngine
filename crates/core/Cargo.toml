@@ -1,0 +1,9 @@
+[package]
+name = "elderforge-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+glam = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }

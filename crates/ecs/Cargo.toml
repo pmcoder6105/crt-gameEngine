@@ -1,0 +1,9 @@
+[package]
+name = "elderforge-ecs"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+elderforge-core = { path = "../core" }
+elderforge-physics = { path = "../physics" }
+hecs = { workspace = true }

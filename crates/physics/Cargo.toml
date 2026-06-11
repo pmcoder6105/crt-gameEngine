@@ -1,0 +1,9 @@
+[package]
+name = "elderforge-physics"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+elderforge-core = { path = "../core" }
+thiserror = { workspace = true }
+log = { workspace = true }

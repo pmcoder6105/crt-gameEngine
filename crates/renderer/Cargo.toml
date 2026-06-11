@@ -1,0 +1,14 @@
+[package]
+name = "elderforge-renderer"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+elderforge-core = { path = "../core" }
+wgpu = { workspace = true }
+egui = { workspace = true }
+egui-wgpu = { workspace = true }
+bytemuck = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+pollster = { workspace = true }
