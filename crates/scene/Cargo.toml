@@ -1,0 +1,11 @@
+[package]
+name = "elderforge-scene"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+elderforge-core = { path = "../core" }
+elderforge-ecs = { path = "../ecs" }
+elderforge-physics = { path = "../physics" }
+thiserror = { workspace = true }
+log = { workspace = true }

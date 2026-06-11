@@ -246,10 +246,14 @@ cargo test               # run all unit + integration tests
 
 [ Update this at the start and end of every session. ]
 
-Example format:
-- Completed: BVH broadphase (physics/src/broadphase/bvh.rs) — all tests pass
-- In progress: GJK narrowphase (physics/src/narrowphase/gjk.rs)
-- Next: EPA penetration depth
+- Completed: Phase 0 — workspace bootstrap. All 8 crates created with
+  module skeletons matching this file's layout; `cargo check` is clean
+  and `cargo test` passes (31 tests: physics unit tests + scene
+  integration tests). XPBD solver integrates gravity only; broadphase,
+  narrowphase, queries, fluids, renderer passes, and the editor panels
+  are stubs with TODOs at the implementation points.
+- Next: winit event loop in the platform crate + renderer surface
+  creation, so `cargo run` opens the editor window.
 
 ---
 
@@ -257,6 +261,16 @@ Example format:
 
 [ Record major architecture decisions here as they are made. ]
 
-Example format:
-2024-01-15 — Chose XPBD over sequential impulse solver. Reason: better
-stability for soft bodies and stiff constraints without tuning.
+2026-06-11 — Crate packages are named `elderforge-*` (e.g. crates/core is
+`elderforge-core`) because `core` collides with Rust's built-in crate.
+Directory names stay as listed in the workspace layout.
+
+2026-06-11 — Only elderforge-core depends on glam. All other crates
+import math types via `elderforge_core::math` re-exports, so the math
+backend is swappable in one place and versions can't drift.
+
+2026-06-11 — Generic generational `Handle<T>` lives in core
+(MeshHandle/TextureHandle/MaterialHandle); the physics crate keeps its
+own plain `BodyHandle` since PhysicsWorld owns body storage. Scene/asset
+serialization deliberately has no serde dependency yet — loader and
+serializer are hand-rolled stubs until the .escene format is designed.

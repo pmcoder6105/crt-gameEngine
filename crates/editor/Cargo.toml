@@ -1,0 +1,10 @@
+[package]
+name = "elderforge-editor"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+elderforge-ecs = { path = "../ecs" }
+elderforge-scene = { path = "../scene" }
+egui = { workspace = true }
+log = { workspace = true }
