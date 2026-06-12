@@ -1,20 +1,47 @@
-//! Window creation and resize handling.
+//! Window creation and the engine event loop.
+//!
+//! winit 0.30 only allows window creation from inside the event loop
+//! (`ApplicationHandler::resumed`), so this module owns both: call
+//! [`run_event_loop`] with a [`WindowConfig`] and a per-frame closure,
+//! and the runner creates the window and drives frames until the closure
+//! returns [`FrameControl::Exit`] or the window is closed.
+
+use std::sync::Arc;
 
 use thiserror::Error;
-use winit::window::Window;
+use winit::application::ApplicationHandler;
+use winit::dpi::LogicalSize;
+use winit::event::WindowEvent;
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::window::{Window, WindowId};
 
+use crate::event::EngineEvent;
+use crate::input::InputState;
+
+/// Errors from window creation or the event loop itself.
 #[derive(Debug, Error)]
 pub enum WindowError {
     #[error("failed to create window: {0}")]
     Creation(String),
+    #[error("event loop error: {0}")]
+    EventLoop(String),
 }
 
 /// Settings used when creating the main engine window.
 #[derive(Debug, Clone)]
 pub struct WindowConfig {
+    /// Window title bar text.
     pub title: String,
+    /// Initial inner width in logical pixels.
     pub width: u32,
+    /// Initial inner height in logical pixels.
     pub height: u32,
+    /// Whether the user can resize the window.
+    pub resizable: bool,
+    /// Whether presentation should wait for vertical sync. The window
+    /// itself doesn't act on this; the renderer reads it via
+    /// [`WindowHandle::vsync`] when choosing a surface present mode.
+    pub vsync: bool,
 }
 
 impl Default for WindowConfig {
@@ -23,28 +50,166 @@ impl Default for WindowConfig {
             title: "Elderforge".to_string(),
             width: 1600,
             height: 900,
+            resizable: true,
+            vsync: true,
         }
     }
 }
 
 /// Owns the winit window — the only place winit window types are visible.
+///
+/// The window is held in an `Arc` so the renderer can later share ownership
+/// for surface creation without the handle giving up the window.
 pub struct WindowHandle {
-    window: Window,
+    window: Arc<Window>,
+    vsync: bool,
 }
 
 impl WindowHandle {
-    // TODO: event-loop runner in this crate constructs this from WindowConfig
-    // (winit 0.30 requires creation inside ApplicationHandler::resumed).
-    pub fn new(window: Window) -> Self {
-        Self { window }
+    /// Only the event-loop runner constructs handles; windows cannot exist
+    /// outside a running event loop in winit 0.30.
+    pub(crate) fn new(window: Window, vsync: bool) -> Self {
+        Self {
+            window: Arc::new(window),
+            vsync,
+        }
     }
 
+    /// Current inner size in physical pixels.
     pub fn size(&self) -> (u32, u32) {
         let size = self.window.inner_size();
         (size.width, size.height)
     }
 
+    /// DPI scale factor of the monitor the window is on.
+    pub fn scale_factor(&self) -> f64 {
+        self.window.scale_factor()
+    }
+
+    /// Whether the window was configured for vsync presentation.
+    pub fn vsync(&self) -> bool {
+        self.vsync
+    }
+
+    /// Ask the OS for another redraw. The runner calls this every frame to
+    /// keep the loop continuous; manual calls are only needed for one-shot
+    /// repaints from event-driven code.
     pub fn request_redraw(&self) {
         self.window.request_redraw();
+    }
+}
+
+/// What the per-frame closure tells the event loop to do next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameControl {
+    /// Keep running; another frame will follow.
+    Continue,
+    /// Shut the event loop down after this frame.
+    Exit,
+}
+
+/// Runs the engine event loop until the closure returns
+/// [`FrameControl::Exit`] or the user closes the window.
+///
+/// The closure is called once per frame with the accumulated
+/// [`InputState`], the [`EngineEvent`]s received since the previous frame
+/// (already applied to the input state), and the [`WindowHandle`].
+/// [`EngineEvent::CloseRequested`] is delivered to the closure for any
+/// last-frame work, then the loop exits regardless of the returned value.
+///
+/// Blocks until the loop ends; on most platforms it must be called from
+/// the main thread.
+pub fn run_event_loop<F>(config: WindowConfig, frame: F) -> Result<(), WindowError>
+where
+    F: FnMut(&mut InputState, &[EngineEvent], &WindowHandle) -> FrameControl,
+{
+    let event_loop = EventLoop::new().map_err(|e| WindowError::EventLoop(e.to_string()))?;
+    // Poll: a simulation engine re-renders continuously instead of waiting
+    // for OS events.
+    event_loop.set_control_flow(ControlFlow::Poll);
+
+    let mut app = EventLoopApp {
+        config,
+        frame,
+        window: None,
+        input: InputState::new(),
+        pending_events: Vec::new(),
+        error: None,
+    };
+    event_loop
+        .run_app(&mut app)
+        .map_err(|e| WindowError::EventLoop(e.to_string()))?;
+
+    match app.error {
+        Some(err) => Err(err),
+        None => Ok(()),
+    }
+}
+
+/// winit `ApplicationHandler` driving [`run_event_loop`].
+struct EventLoopApp<F> {
+    config: WindowConfig,
+    frame: F,
+    window: Option<WindowHandle>,
+    input: InputState,
+    pending_events: Vec<EngineEvent>,
+    /// Failure recorded mid-loop, returned by `run_event_loop` after exit.
+    error: Option<WindowError>,
+}
+
+impl<F> ApplicationHandler for EventLoopApp<F>
+where
+    F: FnMut(&mut InputState, &[EngineEvent], &WindowHandle) -> FrameControl,
+{
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        // Also fired when a suspended app resumes; the window already exists then.
+        if self.window.is_some() {
+            return;
+        }
+        let attributes = Window::default_attributes()
+            .with_title(self.config.title.clone())
+            .with_inner_size(LogicalSize::new(self.config.width, self.config.height))
+            .with_resizable(self.config.resizable);
+        match event_loop.create_window(attributes) {
+            Ok(window) => {
+                window.request_redraw();
+                self.window = Some(WindowHandle::new(window, self.config.vsync));
+            }
+            Err(err) => {
+                self.error = Some(WindowError::Creation(err.to_string()));
+                event_loop.exit();
+            }
+        }
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
+        match event {
+            WindowEvent::RedrawRequested => {
+                let Some(window) = &self.window else {
+                    return;
+                };
+                let events = std::mem::take(&mut self.pending_events);
+                for event in &events {
+                    self.input.handle_event(event);
+                }
+                let close_requested = events
+                    .iter()
+                    .any(|e| matches!(e, EngineEvent::CloseRequested));
+
+                let control = (self.frame)(&mut self.input, &events, window);
+                self.input.end_frame();
+
+                if close_requested || control == FrameControl::Exit {
+                    event_loop.exit();
+                } else {
+                    window.request_redraw();
+                }
+            }
+            other => {
+                if let Some(event) = EngineEvent::from_winit(&other) {
+                    self.pending_events.push(event);
+                }
+            }
+        }
     }
 }

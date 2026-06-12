@@ -259,8 +259,21 @@ cargo test               # run all unit + integration tests
   and `FixedTimestep` accumulator in `core/src/time.rs` (clamps to
   max_steps_per_frame and drops backlog — no death spirals). 15 core
   unit tests; full workspace suite at 46 tests, all green.
-- Next: winit event loop in the platform crate + renderer surface
-  creation, so `cargo run` opens the editor window.
+- Completed: platform windowing layer (winit 0.30). `WindowConfig`
+  (title/size/resizable/vsync), `WindowHandle` owning an `Arc<Window>`
+  (Arc so the renderer can share it for surface creation), `InputState`
+  with per-frame deltas, `EngineEvent` normalization, and
+  `run_event_loop(config, closure)` built on `ApplicationHandler` —
+  the closure runs once per frame with `&mut InputState`, the frame's
+  `&[EngineEvent]`, and `&WindowHandle`, and returns
+  `FrameControl::{Continue, Exit}`. `cargo run` opens the editor
+  window; `cargo run -- --smoke-test` exits clean after 30 frames and
+  is exercised by `crates/elderforge/tests/window_smoke.rs` (spawns
+  the binary as a subprocess — winit needs the process main thread,
+  so it can't run in-process under `#[test]`; needs a GUI session).
+  Hard rule holds: no crate outside platform imports winit.
+- Next: renderer surface creation from `WindowHandle` + first clear
+  pass, so the window shows renderer output instead of an empty frame.
 
 ---
 

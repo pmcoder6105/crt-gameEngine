@@ -2,18 +2,34 @@
 //! re-exported from winit so downstream crates never import winit directly.
 
 pub use winit::event::MouseButton;
-pub use winit::keyboard::KeyCode as Key;
+pub use winit::keyboard::KeyCode;
 
+/// Shorthand alias for [`KeyCode`].
+pub type Key = KeyCode;
+
+/// A window or input event, normalized from winit into the small set the
+/// engine cares about. Coordinates are physical pixels.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EngineEvent {
+    /// The user asked to close the window (close button, Cmd-Q, ...).
     CloseRequested,
+    /// The window's inner size changed, in physical pixels.
     Resized { width: u32, height: u32 },
+    /// The window gained (`true`) or lost (`false`) keyboard focus.
     FocusChanged(bool),
+    /// A physical key went down. Repeats while held, as delivered by the OS.
     KeyPressed(Key),
+    /// A physical key was released.
     KeyReleased(Key),
+    /// The cursor moved to this position in physical pixels, relative to
+    /// the window's top-left corner.
     MouseMoved { x: f64, y: f64 },
+    /// A mouse button went down.
     MouseButtonPressed(MouseButton),
+    /// A mouse button was released.
     MouseButtonReleased(MouseButton),
+    /// Scroll wheel or trackpad scroll. Line-based deltas are in lines,
+    /// pixel-based deltas in pixels; consumers treat both as relative.
     MouseWheel { dx: f32, dy: f32 },
 }
 
@@ -58,5 +74,37 @@ impl EngineEvent {
             },
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use winit::dpi::PhysicalSize;
+    use winit::event::WindowEvent;
+
+    #[test]
+    fn normalizes_events_the_engine_cares_about() {
+        assert_eq!(
+            EngineEvent::from_winit(&WindowEvent::CloseRequested),
+            Some(EngineEvent::CloseRequested)
+        );
+        assert_eq!(
+            EngineEvent::from_winit(&WindowEvent::Resized(PhysicalSize::new(800, 600))),
+            Some(EngineEvent::Resized {
+                width: 800,
+                height: 600
+            })
+        );
+        assert_eq!(
+            EngineEvent::from_winit(&WindowEvent::Focused(true)),
+            Some(EngineEvent::FocusChanged(true))
+        );
+    }
+
+    #[test]
+    fn ignores_events_the_engine_does_not_care_about() {
+        assert_eq!(EngineEvent::from_winit(&WindowEvent::Destroyed), None);
+        assert_eq!(EngineEvent::from_winit(&WindowEvent::HoveredFileCancelled), None);
     }
 }
