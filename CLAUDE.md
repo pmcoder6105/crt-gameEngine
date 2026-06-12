@@ -252,6 +252,13 @@ cargo test               # run all unit + integration tests
   integration tests). XPBD solver integrates gravity only; broadphase,
   narrowphase, queries, fluids, renderer passes, and the editor panels
   are stubs with TODOs at the implementation points.
+- Completed: core crate foundations. `HandleAllocator<T>` (generational
+  alloc/free/validate, stale handles fail validation), `TimingScope`
+  profiler with thread-local span collector + aggregated table output
+  (`profiling::report`), `init_logging()` (re-exported at crate root),
+  and `FixedTimestep` accumulator in `core/src/time.rs` (clamps to
+  max_steps_per_frame and drops backlog — no death spirals). 15 core
+  unit tests; full workspace suite at 46 tests, all green.
 - Next: winit event loop in the platform crate + renderer surface
   creation, so `cargo run` opens the editor window.
 

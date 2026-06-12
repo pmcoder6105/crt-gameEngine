@@ -5,7 +5,7 @@ mod app;
 mod systems;
 
 fn main() -> anyhow::Result<()> {
-    elderforge_core::logging::init();
+    elderforge_core::init_logging();
     log::info!("Elderforge starting");
 
     let mut app = app::App::new();

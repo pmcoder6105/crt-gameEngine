@@ -622,6 +622,7 @@ dependencies = [
  "env_logger",
  "glam",
  "log",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
