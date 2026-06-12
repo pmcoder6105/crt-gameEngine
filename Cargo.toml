@@ -18,6 +18,9 @@ edition = "2021"
 [workspace.dependencies]
 wgpu = "22"
 winit = "0.30"
+# Shared vocabulary between winit (platform) and wgpu (renderer) for surface
+# creation; must stay on the 0.6 line both of them use.
+raw-window-handle = "0.6"
 glam = "0.29"
 hecs = "0.10"
 egui = "0.29"

@@ -658,6 +658,7 @@ name = "elderforge-platform"
 version = "0.1.0"
 dependencies = [
  "log",
+ "raw-window-handle",
  "thiserror 2.0.18",
  "winit",
 ]

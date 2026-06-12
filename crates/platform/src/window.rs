@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use thiserror::Error;
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -97,7 +98,22 @@ impl WindowHandle {
     pub fn request_redraw(&self) {
         self.window.request_redraw();
     }
+
+    /// Shared ownership of the OS window as a `raw-window-handle` trait
+    /// object, for the renderer to create its GPU surface from. This is the
+    /// only window escape hatch, and it deliberately speaks
+    /// `raw-window-handle` rather than winit.
+    pub fn surface_provider(&self) -> Arc<dyn SurfaceProvider> {
+        self.window.clone()
+    }
 }
+
+/// Window-system handles a GPU surface can be created from. Blanket-implemented;
+/// consumers (the renderer) only need the supertraits, which `wgpu` accepts
+/// directly as a surface target.
+pub trait SurfaceProvider: HasWindowHandle + HasDisplayHandle + Send + Sync {}
+
+impl<T: HasWindowHandle + HasDisplayHandle + Send + Sync> SurfaceProvider for T {}
 
 /// What the per-frame closure tells the event loop to do next.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

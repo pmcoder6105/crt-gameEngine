@@ -4,7 +4,7 @@
 mod app;
 mod systems;
 
-use elderforge_platform::{FrameControl, WindowConfig};
+use elderforge_platform::{EngineEvent, FrameControl, WindowConfig};
 
 fn main() -> anyhow::Result<()> {
     elderforge_core::init_logging();
@@ -17,19 +17,26 @@ fn main() -> anyhow::Result<()> {
 
     let mut app = app::App::new();
     let mut frame_count = 0u64;
-    elderforge_platform::run_event_loop(
-        WindowConfig::default(),
-        move |_input, _events, _window| {
-            // TODO: create the renderer surface from the window on the first
-            // frame, and feed events into egui for the editor UI.
-            app.update();
-            frame_count += 1;
-            match max_frames {
-                Some(max) if frame_count >= max => FrameControl::Exit,
-                _ => FrameControl::Continue,
+    let mut fatal: Option<anyhow::Error> = None;
+    elderforge_platform::run_event_loop(WindowConfig::default(), |_input, events, window| {
+        for event in events {
+            if let EngineEvent::Resized { width, height } = event {
+                app.resize(*width, *height);
             }
-        },
-    )?;
+        }
+        if let Err(err) = app.update(window) {
+            fatal = Some(err);
+            return FrameControl::Exit;
+        }
+        frame_count += 1;
+        match max_frames {
+            Some(max) if frame_count >= max => FrameControl::Exit,
+            _ => FrameControl::Continue,
+        }
+    })?;
+    if let Some(err) = fatal {
+        return Err(err);
+    }
 
     log::info!("Elderforge exiting");
     Ok(())

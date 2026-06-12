@@ -12,6 +12,9 @@ pub mod texture;
 
 use thiserror::Error;
 
+pub use context::{FrameContext, RenderContext};
+pub use mesh::{GpuMesh, Vertex};
+
 #[derive(Debug, Error)]
 pub enum RendererError {
     #[error("no suitable GPU adapter found")]

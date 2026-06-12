@@ -34,4 +34,31 @@ pub struct GpuMesh {
     pub index_count: u32,
 }
 
-// TODO: GpuMesh::upload(device, &[Vertex], &[u32]) via wgpu::util::DeviceExt.
+impl GpuMesh {
+    /// Uploads vertex and index data to the GPU. Indices are `u32`
+    /// throughout the engine; passes bind with `IndexFormat::Uint32`.
+    pub fn upload(
+        device: &wgpu::Device,
+        label: &str,
+        vertices: &[Vertex],
+        indices: &[u32],
+    ) -> Self {
+        use wgpu::util::DeviceExt;
+
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(&format!("{label}.vertices")),
+            contents: bytemuck::cast_slice(vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(&format!("{label}.indices")),
+            contents: bytemuck::cast_slice(indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        Self {
+            vertex_buffer,
+            index_buffer,
+            index_count: indices.len() as u32,
+        }
+    }
+}
