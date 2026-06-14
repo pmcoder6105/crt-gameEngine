@@ -289,10 +289,47 @@ cargo test               # run all unit + integration tests
   `tests/triangle_readback.rs` renders offscreen and reads pixels back
   (passes), `cargo run -- --smoke-test` runs 30 frames and exits clean.
   Full workspace suite green (54 tests).
-- Next: depth buffer + camera uniforms (bind group layouts in
-  `PipelineBuilder`, currently empty), then the real PBR pass driven by
-  `(Transform, MeshRenderer)` pairs gathered in `systems::render::run`
-  (the draw-list TODO there) instead of the bootstrap triangle.
+- Completed: minimal rigid-body simulation in the physics crate.
+  `RigidBody` gained `mass`, `inv_inertia_tensor` (Mat3), and a minimal
+  `Collider` (`Sphere`/`HalfSpace`), with `dynamic`/`fixed` constructors
+  (solid-sphere inertia ⅖mr²) and `kinetic_energy()`. `BodyHandle` is now
+  `Handle<RigidBody>` from core (see decisions log). `PhysicsWorld::step`
+  is integrate -> broadphase -> narrowphase -> resolve: semi-implicit
+  Euler (now also integrates orientation from angular velocity in
+  `XpbdSolver`), `broadphase::naive_pairs` O(n²) AABB pairs,
+  `narrowphase::sphere_sphere`/`sphere_halfspace` contacts, and
+  `solver::impulse::resolve_contact` (frictionless linear normal impulse
+  + inverse-mass-split positional correction; restitution combined via
+  min). Linear-only impulse is exact for spheres/half-spaces (lever arm ∥
+  normal -> zero torque), so elastic hits conserve energy to fp epsilon.
+  Scenario tests in `crates/physics/tests/rigid_body_sim.rs`: a ball
+  settles on a static ground plane at y=radius with ~zero velocity, and
+  an e=1 head-on pair conserves KE within 1e-3, and a restitution-0.8 ball
+  rebounds then loses energy. Physics crate at 46 lib + 3 integration
+  tests; full workspace green.
+- Completed: ECS + binary scene loop (phase 5). The ECS crate already had
+  the six components (Transform/PhysicsBody/MeshRenderer/Collider/Joint/
+  Camera) and the hecs `World`/`Entity` re-export from the skeleton —
+  verified complete, no changes needed. Renderer gained a camera+depth
+  forward path: `primitives::{cube,plane}`, `ForwardPass` (group 0 camera
+  view-proj uniform, group 1 per-object model matrix via dynamic offset,
+  Depth32Float target, simple directional shade in `shaders/forward.wgsl`),
+  and `PipelineBuilder::build` now takes bind-group layouts. The binary
+  loop (`app.rs` + `systems/`) steps physics via core `FixedTimestep`
+  (120 Hz, ≤8 steps/frame), `systems::physics::run` syncs each body pose
+  into its `Transform`, and `systems::render::run` draws one call per
+  `(Transform, MeshRenderer)` through the active `Camera` entity. `App`
+  spawns a fixed camera, a ground plane, and 50 cubes (sphere bodies,
+  restitution 0.6) at random heights via a tiny xorshift RNG. Verified on
+  this Mac (Metal): headless `crates/elderforge/tests/scene_render.rs`
+  renders the scene offscreen (green ground + 5×5 cube grid, 58% lit) and
+  `cargo run -- --smoke-test` builds the 52-entity scene and exits clean.
+  Added wgpu+pollster as elderforge dev-deps for the offscreen test.
+- Next: feed real contacts into the XPBD solver (replace the bring-up
+  impulse path), add friction + box colliders (cubes are sphere-approx in
+  physics for now), and render via the real PBR pass instead of the
+  forward bootstrap. BVH broadphase is still Phase 6; `naive_pairs` is the
+  placeholder until then.
 
 ---
 
@@ -313,3 +350,20 @@ backend is swappable in one place and versions can't drift.
 own plain `BodyHandle` since PhysicsWorld owns body storage. Scene/asset
 serialization deliberately has no serde dependency yet — loader and
 serializer are hand-rolled stubs until the .escene format is designed.
+
+2026-06-14 — Supersedes the BodyHandle half of the 2026-06-11 entry:
+`BodyHandle` is now `pub type BodyHandle = Handle<RigidBody>` (core's
+generic handle), not a bespoke struct. The world still owns body storage
+and tracks generations itself (append-only + bump-on-remove); only the
+handle *type* moved to core, so body handles can't be confused with
+mesh/texture/material handles. Existing `BodyHandle` users (ECS
+`PhysicsBody`/`Joint`, query, bvh, constraints) were unaffected —
+construction switched from `BodyHandle { .. }` to `BodyHandle::new(..)`.
+
+2026-06-14 — The first rigid-body pipeline is an impulse/velocity bring-up
+(semi-implicit Euler + `solver::impulse`), NOT XPBD. XPBD stays the target
+solver (per the architecture section); the impulse path exists so collision
+response works before XPBD contacts land, and is expected to be replaced.
+For the same reason `body::Collider` (`Sphere`/`HalfSpace`) is a minimal
+fast-path shape set kept separate from the full `shapes::ColliderShape`
+(GJK/EPA) enum — don't merge them; the half-space has no GJK support.

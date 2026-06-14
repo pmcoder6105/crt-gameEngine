@@ -29,6 +29,23 @@ impl Aabb {
     }
 }
 
+/// Naive O(n²) broadphase: tests every pair of AABBs and returns the indices
+/// of those that overlap, as `(i, j)` with `i < j`.
+///
+/// Placeholder until the BVH (Phase 6) replaces the all-pairs scan with an
+/// incremental tree. Pair indices map back into the caller's body slice.
+pub fn naive_pairs(aabbs: &[Aabb]) -> Vec<(usize, usize)> {
+    let mut pairs = Vec::new();
+    for i in 0..aabbs.len() {
+        for j in (i + 1)..aabbs.len() {
+            if aabbs[i].overlaps(&aabbs[j]) {
+                pairs.push((i, j));
+            }
+        }
+    }
+    pairs
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -51,5 +68,21 @@ mod tests {
         assert!(merged.overlaps(&b));
         assert_eq!(merged.min, Vec3::ZERO);
         assert_eq!(merged.max, Vec3::splat(3.0));
+    }
+
+    #[test]
+    fn naive_pairs_reports_only_overlaps() {
+        let aabbs = [
+            Aabb::new(Vec3::ZERO, Vec3::ONE),          // 0
+            Aabb::new(Vec3::splat(0.5), Vec3::splat(1.5)), // 1, overlaps 0
+            Aabb::new(Vec3::splat(10.0), Vec3::splat(11.0)), // 2, isolated
+        ];
+        assert_eq!(naive_pairs(&aabbs), vec![(0, 1)]);
+    }
+
+    #[test]
+    fn naive_pairs_empty_for_fewer_than_two() {
+        assert!(naive_pairs(&[]).is_empty());
+        assert!(naive_pairs(&[Aabb::new(Vec3::ZERO, Vec3::ONE)]).is_empty());
     }
 }

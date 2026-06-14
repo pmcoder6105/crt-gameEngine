@@ -613,6 +613,8 @@ dependencies = [
  "elderforge-renderer",
  "elderforge-scene",
  "log",
+ "pollster",
+ "wgpu",
 ]
 
 [[package]]

@@ -29,13 +29,15 @@ impl<'a> PipelineBuilder<'a> {
         self
     }
 
-    /// Creates the pipeline targeting `color_format`.
-    // TODO: bind group layouts once passes need uniforms/textures.
+    /// Creates the pipeline targeting `color_format`, binding the given
+    /// `bind_group_layouts` (in `@group` order). Pass `&[]` for a pass that
+    /// needs no uniforms or textures.
     pub fn build(
         &self,
         device: &wgpu::Device,
         color_format: wgpu::TextureFormat,
         vertex_layouts: &[wgpu::VertexBufferLayout],
+        bind_group_layouts: &[&wgpu::BindGroupLayout],
     ) -> wgpu::RenderPipeline {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some(self.label),
@@ -43,7 +45,7 @@ impl<'a> PipelineBuilder<'a> {
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some(self.label),
-            bind_group_layouts: &[],
+            bind_group_layouts,
             push_constant_ranges: &[],
         });
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {

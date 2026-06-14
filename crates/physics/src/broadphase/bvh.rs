@@ -61,7 +61,7 @@ mod tests {
     use super::*;
 
     fn handle(index: u32) -> BodyHandle {
-        BodyHandle { index, generation: 0 }
+        BodyHandle::new(index, 0)
     }
 
     #[test]

@@ -12,7 +12,7 @@ pub mod shapes;
 pub mod solver;
 pub mod world;
 
-pub use body::{BodyHandle, RigidBody, SoftBody};
+pub use body::{BodyHandle, BodyKind, Collider, RigidBody, SoftBody};
 pub use material::PhysicsMaterial;
 pub use shapes::ColliderShape;
 pub use world::PhysicsWorld;

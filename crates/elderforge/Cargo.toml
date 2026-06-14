@@ -16,3 +16,9 @@ log = { workspace = true }
 # egui <-> window glue, wired up together with the winit event loop.
 egui = { workspace = true }
 egui-winit = { workspace = true }
+
+[dev-dependencies]
+# Headless GPU integration tests (offscreen render + readback) talk to wgpu
+# directly, the same way the renderer crate's triangle readback test does.
+wgpu = { workspace = true }
+pollster = { workspace = true }

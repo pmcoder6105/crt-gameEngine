@@ -8,12 +8,16 @@ pub mod material;
 pub mod mesh;
 pub mod passes;
 pub mod pipeline;
+pub mod primitives;
 pub mod texture;
 
 use thiserror::Error;
 
+pub use cache::ResourceCache;
+pub use camera::Camera;
 pub use context::{FrameContext, RenderContext};
 pub use mesh::{GpuMesh, Vertex};
+pub use passes::forward::{Draw, ForwardPass};
 
 #[derive(Debug, Error)]
 pub enum RendererError {

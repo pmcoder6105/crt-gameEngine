@@ -23,7 +23,7 @@ impl UnlitPass {
         let pipeline = PipelineBuilder::new("unlit", include_str!("../shaders/unlit.wgsl"))
             // No depth buffer exists yet; the pass has no depth attachment.
             .depth_test(false)
-            .build(device, color_format, &[Vertex::layout()]);
+            .build(device, color_format, &[Vertex::layout()], &[]);
         Self { pipeline }
     }
 
