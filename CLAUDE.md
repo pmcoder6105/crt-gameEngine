@@ -272,8 +272,27 @@ cargo test               # run all unit + integration tests
   the binary as a subprocess — winit needs the process main thread,
   so it can't run in-process under `#[test]`; needs a GUI session).
   Hard rule holds: no crate outside platform imports winit.
-- Next: renderer surface creation from `WindowHandle` + first clear
-  pass, so the window shows renderer output instead of an empty frame.
+- Completed: renderer wgpu context + bootstrap triangle. `RenderContext`
+  (Instance/Adapter/Device/Queue/Surface/SurfaceConfiguration) created
+  from `WindowHandle::surface_provider()`, async init blocked on via
+  pollster, sRGB surface format preferred. `resize(w, h)` reconfigures
+  (ignores zero-size/minimized); `frame() -> FrameContext` acquires the
+  surface texture + view + encoder, retrying once on Lost/Outdated;
+  `present()` submits and presents. `GpuMesh::upload(device, label,
+  &[Vertex], &[u32])` for vertex/index buffers (u32 indices engine-wide).
+  `UnlitPass` (passes/unlit.rs + shaders/unlit.wgsl) clears to the dark
+  bg and draws geometry with the vertex normal slot reinterpreted as RGB
+  color — no camera/lighting, just to prove surface -> pipeline -> draw.
+  Wired through `App::init_renderer` (lazy, on first frame once the
+  window exists) and `systems::render::run`; `cargo run` opens the
+  window and shows the RGB triangle. Verified on this Mac (Metal):
+  `tests/triangle_readback.rs` renders offscreen and reads pixels back
+  (passes), `cargo run -- --smoke-test` runs 30 frames and exits clean.
+  Full workspace suite green (54 tests).
+- Next: depth buffer + camera uniforms (bind group layouts in
+  `PipelineBuilder`, currently empty), then the real PBR pass driven by
+  `(Transform, MeshRenderer)` pairs gathered in `systems::render::run`
+  (the draw-list TODO there) instead of the bootstrap triangle.
 
 ---
 
