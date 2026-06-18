@@ -27,13 +27,49 @@ impl Aabb {
             max: self.max.max(other.max),
         }
     }
+
+    /// Surface area of the box; the cost metric the SAH minimizes. Zero for a
+    /// degenerate (inverted/empty) box.
+    pub fn surface_area(&self) -> f32 {
+        let d = self.max - self.min;
+        if d.x < 0.0 || d.y < 0.0 || d.z < 0.0 {
+            return 0.0;
+        }
+        2.0 * (d.x * d.y + d.y * d.z + d.z * d.x)
+    }
+
+    /// True if `other` lies entirely inside `self` (inclusive).
+    pub fn contains(&self, other: &Aabb) -> bool {
+        self.min.cmple(other.min).all() && other.max.cmple(self.max).all()
+    }
+
+    /// This box grown by `margin` on every side.
+    pub fn expanded(&self, margin: f32) -> Aabb {
+        let m = Vec3::splat(margin);
+        Aabb {
+            min: self.min - m,
+            max: self.max + m,
+        }
+    }
+
+    /// Center point of the box.
+    pub fn center(&self) -> Vec3 {
+        (self.min + self.max) * 0.5
+    }
+
+    /// True if both corners are finite. Half-space colliders report an
+    /// infinite AABB, which can't go in the BVH (infinite surface area).
+    pub fn is_finite(&self) -> bool {
+        self.min.is_finite() && self.max.is_finite()
+    }
 }
 
 /// Naive O(n²) broadphase: tests every pair of AABBs and returns the indices
 /// of those that overlap, as `(i, j)` with `i < j`.
 ///
-/// Placeholder until the BVH (Phase 6) replaces the all-pairs scan with an
-/// incremental tree. Pair indices map back into the caller's body slice.
+/// Superseded by [`Bvh`] for the production broadphase; kept as the simple,
+/// obviously-correct reference the BVH is tested against. Pair indices map
+/// back into the caller's body slice.
 pub fn naive_pairs(aabbs: &[Aabb]) -> Vec<(usize, usize)> {
     let mut pairs = Vec::new();
     for i in 0..aabbs.len() {

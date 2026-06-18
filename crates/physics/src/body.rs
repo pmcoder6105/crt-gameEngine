@@ -28,6 +28,8 @@ pub enum BodyKind {
 pub enum Collider {
     /// Solid sphere of the given radius, centered on the body position.
     Sphere { radius: f32 },
+    /// Box with the given half-extents, oriented by the body's rotation.
+    Box { half_extents: Vec3 },
     /// Static half-space (e.g. a ground plane): the solid region lies on the
     /// `-normal` side of the plane `dot(normal, x) = offset`. `normal` is the
     /// unit outward normal (the direction bodies are pushed out of the solid).
@@ -37,11 +39,19 @@ pub enum Collider {
 impl Collider {
     /// World-space AABB of the collider at `position`. A half-space is
     /// unbounded, so it returns an infinite box that overlaps everything —
-    /// the naive broadphase then leaves narrowphase to reject non-contacts.
+    /// the broadphase then leaves narrowphase to reject non-contacts. The box
+    /// AABB ignores rotation (uses the extents directly), which is a safe
+    /// over-estimate for broadphase.
     pub fn aabb(&self, position: Vec3) -> Aabb {
         match self {
             Collider::Sphere { radius } => {
                 Aabb::new(position - Vec3::splat(*radius), position + Vec3::splat(*radius))
+            }
+            Collider::Box { half_extents } => {
+                // Conservative: a rotated box fits within the sphere of its
+                // diagonal, so pad by the longest half-extent on every axis.
+                let r = Vec3::splat(half_extents.length());
+                Aabb::new(position - r, position + r)
             }
             Collider::HalfSpace { .. } => {
                 Aabb::new(Vec3::splat(f32::NEG_INFINITY), Vec3::splat(f32::INFINITY))
@@ -54,6 +64,9 @@ impl Collider {
 pub struct RigidBody {
     pub kind: BodyKind,
     pub position: Vec3,
+    /// Position at the start of the current XPBD substep. The solver writes it
+    /// each substep and derives velocity from `position - prev_position`.
+    pub prev_position: Vec3,
     /// Orientation. Quaternion; integrated from `angular_velocity`.
     pub rotation: Quat,
     pub linear_velocity: Vec3,
@@ -79,6 +92,7 @@ impl RigidBody {
         Self {
             kind: BodyKind::Dynamic,
             position,
+            prev_position: position,
             rotation: Quat::IDENTITY,
             linear_velocity: Vec3::ZERO,
             angular_velocity: Vec3::ZERO,
@@ -97,6 +111,7 @@ impl RigidBody {
         Self {
             kind: BodyKind::Static,
             position,
+            prev_position: position,
             rotation: Quat::IDENTITY,
             linear_velocity: Vec3::ZERO,
             angular_velocity: Vec3::ZERO,

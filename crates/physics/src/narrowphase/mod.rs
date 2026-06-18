@@ -1,10 +1,76 @@
 //! Narrowphase: GJK + EPA for convex shapes; SAT for polyhedra.
 
+pub mod convex;
 pub mod epa;
 pub mod gjk;
 pub mod sat;
 
+pub use convex::{surface_support, AnyShape, ConvexShape, Pose};
+
 use elderforge_core::math::{Vec3, EPSILON};
+
+use gjk::GjkOutcome;
+
+/// A single-point contact between two convex shapes: where they touch, the
+/// separation `normal` (pointing from A toward B), and the penetration `depth`.
+#[derive(Debug, Clone, Copy)]
+pub struct ContactManifold {
+    pub contact_point: Vec3,
+    pub normal: Vec3,
+    pub depth: f32,
+}
+
+/// Narrowphase entry point: collide two convex shapes at the given poses.
+///
+/// Runs GJK on the shape cores; if they are close enough that the rounding
+/// margins touch, or if they overlap (resolved by EPA), returns a
+/// [`ContactManifold`]. Returns `None` when the shapes are apart.
+pub fn collide(
+    a: &dyn ConvexShape,
+    pose_a: &Pose,
+    b: &dyn ConvexShape,
+    pose_b: &Pose,
+) -> Option<ContactManifold> {
+    let total_margin = a.margin() + b.margin();
+    match gjk::gjk(a, pose_a, b, pose_b) {
+        GjkOutcome::Separated { distance, normal, point_a, point_b } => {
+            if distance > total_margin {
+                return None;
+            }
+            Some(manifold(point_a, point_b, normal, total_margin - distance, a, b))
+        }
+        GjkOutcome::Penetrating { simplex } => {
+            let hit = epa::epa(a, pose_a, b, pose_b, &simplex)?;
+            Some(manifold(
+                hit.point_a,
+                hit.point_b,
+                hit.normal,
+                hit.depth + total_margin,
+                a,
+                b,
+            ))
+        }
+    }
+}
+
+/// Assemble a manifold: push the core witness points out to each shape's
+/// surface by its margin and take the midpoint as the contact point.
+fn manifold(
+    core_a: Vec3,
+    core_b: Vec3,
+    normal: Vec3,
+    depth: f32,
+    a: &dyn ConvexShape,
+    b: &dyn ConvexShape,
+) -> ContactManifold {
+    let surface_a = core_a + normal * a.margin();
+    let surface_b = core_b - normal * b.margin();
+    ContactManifold {
+        contact_point: (surface_a + surface_b) * 0.5,
+        normal,
+        depth,
+    }
+}
 
 /// A single contact point produced by the narrowphase.
 ///

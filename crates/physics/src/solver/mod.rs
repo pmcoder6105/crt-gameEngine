@@ -4,4 +4,4 @@ pub mod constraints;
 pub mod impulse;
 pub mod xpbd;
 
-pub use xpbd::XpbdSolver;
+pub use xpbd::{Constraint, ContactConstraint, DistanceConstraint};

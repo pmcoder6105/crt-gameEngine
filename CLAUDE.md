@@ -325,11 +325,45 @@ cargo test               # run all unit + integration tests
   renders the scene offscreen (green ground + 5×5 cube grid, 58% lit) and
   `cargo run -- --smoke-test` builds the 52-entity scene and exits clean.
   Added wgpu+pollster as elderforge dev-deps for the offscreen test.
-- Next: feed real contacts into the XPBD solver (replace the bring-up
-  impulse path), add friction + box colliders (cubes are sphere-approx in
-  physics for now), and render via the real PBR pass instead of the
-  forward bootstrap. BVH broadphase is still Phase 6; `naive_pairs` is the
-  placeholder until then.
+- Completed: BVH broadphase (phase 6). `broadphase/bvh.rs` rebuilt as a
+  real binary BVH: `BvhNode { aabb, parent, kind: Internal{left,right} |
+  Leaf{body} }`, top-down **binned SAH** construction, incremental
+  `refit` (cheap ancestor refit while a body stays in its leaf's expanded
+  box; otherwise rebuilds the lowest enclosing subtree, keeping depth ~
+  log2(n)), `query_pairs`, and `debug_iter_aabbs`. `PhysicsWorld` now
+  builds a BVH each substep over finite-AABB bodies (half-spaces, infinite
+  AABB, paired separately) instead of `naive_pairs` (kept as the test
+  oracle). Tests (`tests/bvh.rs`): 1000-AABB query == brute force; 10k
+  bodies BVH 21ms vs brute 1.24s; tree stays within 2·log2(n) deep over
+  100 frames of moving half the bodies.
+- Completed: GJK + EPA narrowphase. `narrowphase/convex.rs` adds a
+  `ConvexShape` trait (`support` + rounding `margin`) implemented for
+  Sphere/Box/Capsule/ConvexHull, plus `Pose` and `AnyShape`. `gjk.rs` is a
+  distance GJK (Voronoi sub-simplex solver, degenerate-tetra guard for
+  planar Minkowski sets); `epa.rs` expands the polytope (exhausted-face
+  skipping for the box degeneracy). `collide(a, pose_a, b, pose_b) ->
+  Option<ContactManifold{contact_point, normal, depth}>` runs GJK on the
+  cores then folds margins back in (exact for rounded shapes). Tests
+  (`tests/narrowphase.rs`): box-box edge, sphere-box face, capsule-capsule
+  angled, boxes barely overlapping/separated — all vs analytic answers.
+- Completed: XPBD solver (replaces the impulse bring-up). `solver/xpbd.rs`
+  has a `Constraint` trait (`project` + `reset`), `DistanceConstraint`
+  (rest length + compliance) and `ContactConstraint` (built from a
+  `ContactManifold` each substep, re-evaluated so multiple iterations
+  don't over-correct, + a velocity-level restitution pass).
+  `PhysicsWorld::step` is now the XPBD substep loop (predict → broadphase +
+  narrowphase contacts → project → derive velocity → restitution),
+  `substeps` (default 20) and `iterations` (default 4) configurable;
+  `add_distance_constraint(a, b, rest, compliance)` for ropes/joints.
+  Bodies gained `prev_position` and a `Box` collider. Tests
+  (`tests/xpbd.rs`): stiff 10-link rope converges in one 20-substep frame;
+  10-box stack stable 600 frames (no drift/popping); pendulum period 0.34%
+  off analytic. Full workspace green (100 tests); binary still falls/
+  settles the 50-body scene under XPBD.
+- Next: friction in the contact solver, angular contact response (contacts
+  are linear-only — fine for centered/axis-aligned cases), persistent
+  BVH refit inside the world (currently rebuilt per substep), and the real
+  PBR render pass.
 
 ---
 
@@ -367,3 +401,22 @@ response works before XPBD contacts land, and is expected to be replaced.
 For the same reason `body::Collider` (`Sphere`/`HalfSpace`) is a minimal
 fast-path shape set kept separate from the full `shapes::ColliderShape`
 (GJK/EPA) enum — don't merge them; the half-space has no GJK support.
+
+2026-06-16 — Supersedes the solver half of the 2026-06-14 entry: the world
+solver is now XPBD (`PhysicsWorld::step` substep loop + `solver::xpbd`
+constraints), as targeted. `solver::impulse` stays as a tested module but
+is no longer called by the world. `body::Collider` grew a `Box` variant and
+is mapped to the GJK `ConvexShape`s via `narrowphase::AnyShape`; half-spaces
+keep their dedicated contact generator (`world::halfspace_contact`) since
+they're unbounded and can't go through GJK. XPBD contacts are linear-only
+(no angular term) — exact for centered/axis-aligned contacts, which is why
+the box-stack test uses axis-aligned cubes.
+
+2026-06-16 — GJK/EPA run on shape *cores* with a separate rounding `margin`
+(sphere = point + r, capsule = segment + r, box/hull = exact polytope,
+margin 0). Collision distance/penetration is computed on the cores, then
+the margins are folded back in. This keeps sphere/capsule contacts
+analytically exact (no EPA on curved surfaces) and limits EPA to genuine
+polytopes. EPA reconstructs its own origin-enclosing tetrahedron and skips
+faces it can't expand, to survive the box-vs-box degeneracy (Minkowski
+difference of two boxes is a box, often leaving the origin on a face).
