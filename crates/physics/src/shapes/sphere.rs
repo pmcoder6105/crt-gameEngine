@@ -1,8 +1,9 @@
 use elderforge_core::math::Vec3;
+use serde::{Deserialize, Serialize};
 
 use crate::broadphase::Aabb;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Sphere {
     pub radius: f32,
 }

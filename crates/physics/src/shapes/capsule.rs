@@ -1,10 +1,11 @@
 use elderforge_core::math::Vec3;
+use serde::{Deserialize, Serialize};
 
 use crate::broadphase::Aabb;
 
 /// Capsule aligned with the local Y axis: a segment of `2 * half_height`
 /// swept by `radius`.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Capsule {
     pub radius: f32,
     pub half_height: f32,

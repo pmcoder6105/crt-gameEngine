@@ -1,6 +1,7 @@
 use elderforge_core::math::{Mat4, Quat, Vec3};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Transform {
     pub position: Vec3,
     pub rotation: Quat,

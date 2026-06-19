@@ -127,6 +127,19 @@ impl PhysicsWorld {
         self.last_narrowphase_tests
     }
 
+    /// Read-only view of every body slot in handle-index order, for
+    /// serialization. Includes tombstoned (`removed`) slots so a serialized
+    /// handle's index still lines up with its body on reload.
+    pub fn bodies(&self) -> &[RigidBody] {
+        &self.bodies
+    }
+
+    /// Slot generation for each body, parallel to [`bodies`](Self::bodies).
+    /// A handle is `BodyHandle::new(index, generations()[index])`.
+    pub fn generations(&self) -> &[u32] {
+        &self.generations
+    }
+
     /// Index of a live body, validating the handle's generation.
     fn index_of(&self, handle: BodyHandle) -> Option<usize> {
         if *self.generations.get(handle.index() as usize)? != handle.generation() {

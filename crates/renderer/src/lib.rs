@@ -18,6 +18,7 @@ pub use camera::Camera;
 pub use context::{FrameContext, RenderContext};
 pub use mesh::{GpuMesh, Vertex};
 pub use passes::forward::{Draw, ForwardPass};
+pub use texture::GpuTexture;
 
 #[derive(Debug, Error)]
 pub enum RendererError {

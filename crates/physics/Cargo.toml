@@ -7,3 +7,6 @@ edition.workspace = true
 elderforge-core = { path = "../core" }
 thiserror = { workspace = true }
 log = { workspace = true }
+# Bodies, colliders, shapes, and materials derive Serialize/Deserialize so the
+# scene crate's .escene format can persist physics state directly.
+serde = { workspace = true }

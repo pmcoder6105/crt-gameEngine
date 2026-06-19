@@ -1,10 +1,11 @@
 use elderforge_core::math::Vec3;
+use serde::{Deserialize, Serialize};
 
 use crate::broadphase::Aabb;
 
 /// Convex hull defined by its vertices in local space.
 /// // TODO: precomputed face/edge adjacency for SAT.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ConvexHull {
     pub points: Vec<Vec3>,
 }

@@ -1,7 +1,8 @@
 //! App — holds the Scene, GPU resources, the editor, and the frame clock, and
-//! drives one frame: editor UI → physics (under the sim controls) → render
-//! (3D + egui in a single surface frame).
+//! drives one frame: editor UI → scene save/load (from the toolbar) → physics
+//! (under the sim controls) → render (3D + egui in a single surface frame).
 
+use std::path::PathBuf;
 use std::time::Instant;
 
 use anyhow::Context as _;
@@ -9,11 +10,12 @@ use elderforge_core::time::FixedTimestep;
 use elderforge_editor::{EditorState, EditorStats};
 use elderforge_platform::time::Clock;
 use elderforge_platform::{RawWindowEvent, WindowHandle};
-use elderforge_renderer::material::PbrMaterial;
-use elderforge_renderer::{primitives, ForwardPass, GpuMesh, RenderContext, ResourceCache};
+use elderforge_renderer::{ForwardPass, RenderContext, ResourceCache};
+use elderforge_scene::assets::{MaterialDef, MeshSource};
 use elderforge_scene::Scene;
 
-use elderforge::demos::{Demo, DemoAssets, CAPSULE_BASE_HALF_HEIGHT, CAPSULE_BASE_RADIUS};
+use elderforge::assets::AssetManager;
+use elderforge::demos::{Demo, DemoAssets};
 
 use crate::systems;
 
@@ -38,6 +40,9 @@ pub struct App {
     /// Created lazily alongside `gpu` (it needs the device, surface format, and
     /// window). `None` until the first frame.
     editor: Option<EditorState>,
+    /// Decodes and memoizes file-backed assets; used to (re)build the GPU cache
+    /// from a scene's asset table on startup and after a Load.
+    asset_manager: AssetManager,
     /// Last frame's timings, shown by the stats panel one frame later.
     last_frame_ms: f32,
     last_physics_ms: f32,
@@ -52,6 +57,7 @@ impl App {
             fixed: FixedTimestep::new(1.0 / PHYSICS_HZ, MAX_STEPS_PER_FRAME),
             gpu: None,
             editor: None,
+            asset_manager: AssetManager::new(),
             last_frame_ms: 0.0,
             last_physics_ms: 0.0,
         }
@@ -66,8 +72,9 @@ impl App {
         }
     }
 
-    /// One frame: run the editor UI, step physics under the sim controls, then
-    /// draw the 3D scene and the editor into a single surface frame.
+    /// One frame: run the editor UI, honor any save/load request, step physics
+    /// under the sim controls, then draw the 3D scene and the editor into a
+    /// single surface frame.
     pub fn update(&mut self, window: &WindowHandle) -> anyhow::Result<()> {
         if self.gpu.is_none() {
             self.init(window).context("renderer initialization failed")?;
@@ -79,7 +86,7 @@ impl App {
             physics_time_ms: self.last_physics_ms,
         };
 
-        let Self { scene, gpu, editor, fixed, .. } = self;
+        let Self { scene, gpu, editor, fixed, asset_manager, .. } = self;
         let gpu = gpu.as_mut().expect("gpu initialized above");
         let editor = editor.as_mut().expect("editor initialized above");
 
@@ -94,10 +101,16 @@ impl App {
             }
         };
 
-        // 1. Editor UI — reads/edits the scene, toggles the sim controls.
+        // 1. Editor UI — reads/edits the scene, toggles the sim controls, and
+        //    records save/load requests in the toolbar.
         let editor_frame = editor.run_frame(window.winit_window(), scene, stats);
 
-        // 2. Step physics according to the simulation controls. Pause stops the
+        // 2. Service the toolbar's scene save/load. Loading swaps in a new scene
+        //    and rebuilds the GPU cache from its asset table before anything
+        //    below renders it.
+        handle_scene_io(scene, gpu, editor, asset_manager);
+
+        // 3. Step physics according to the simulation controls. Pause stops the
         //    stepping (but not the rendering below); Step advances exactly one
         //    fixed tick; the multiplier scales simulated time; the substep slider
         //    drives the solver's substep count.
@@ -120,7 +133,7 @@ impl App {
         }
         let physics_ms = physics_start.elapsed().as_secs_f32() * 1000.0;
 
-        // 3. Render: 3D scene first, then the editor on top, then present.
+        // 4. Render: 3D scene first, then the editor on top, then present.
         systems::render::record(scene, &gpu.context, &gpu.cache, &mut gpu.forward, &mut frame);
         let (width, height) = gpu.context.size();
         editor.paint(
@@ -150,37 +163,85 @@ impl App {
     fn init(&mut self, window: &WindowHandle) -> anyhow::Result<()> {
         let (width, height) = window.size();
         let context = RenderContext::new(window.surface_provider(), width, height, window.vsync())?;
-
-        // Upload the primitive meshes once and reference them by handle. Every
-        // demo draws from this shared set; the demo picks what it needs.
-        let mut cache = ResourceCache::new();
-        let (cube_v, cube_i) = primitives::cube(0.5);
-        let cube = cache.insert_mesh(GpuMesh::upload(&context.device, "cube", &cube_v, &cube_i));
-        let (sphere_v, sphere_i) = primitives::sphere(1.0, 24, 16);
-        let sphere = cache.insert_mesh(GpuMesh::upload(&context.device, "sphere", &sphere_v, &sphere_i));
-        let (capsule_v, capsule_i) =
-            primitives::capsule(CAPSULE_BASE_RADIUS, CAPSULE_BASE_HALF_HEIGHT, 16, 8);
-        let capsule =
-            cache.insert_mesh(GpuMesh::upload(&context.device, "capsule", &capsule_v, &capsule_i));
-        let (plane_v, plane_i) = primitives::plane(40.0);
-        let plane =
-            cache.insert_mesh(GpuMesh::upload(&context.device, "plane", &plane_v, &plane_i));
-        let material = cache.insert_material(PbrMaterial::default());
-
         let forward = ForwardPass::new(&context.device, context.surface_format(), (width, height));
+
+        // `SceneAssets` is the resource-handle authority: register the builtin
+        // primitive meshes and the default material, hand the handles to the
+        // demo, then realize the whole table into the GPU cache at those handles.
+        let cube = self.scene.assets.register_mesh(MeshSource::Builtin("cube".into()));
+        let sphere = self.scene.assets.register_mesh(MeshSource::Builtin("sphere".into()));
+        let capsule = self.scene.assets.register_mesh(MeshSource::Builtin("capsule".into()));
+        let plane = self.scene.assets.register_mesh(MeshSource::Builtin("plane".into()));
+        let material = self.scene.assets.register_material(MaterialDef::default());
 
         let assets = DemoAssets { cube, sphere, capsule, plane, material };
         self.demo.setup(&mut self.scene, &assets);
         log::info!("demo '{}': {} entities", self.demo.name(), self.scene.world.len());
 
+        let cache = self
+            .asset_manager
+            .realize(&self.scene, &context.device, &context.queue)
+            .context("realizing demo assets")?;
+
         // The editor needs the device + surface format; create it here, then
         // seed the substep slider with the scene's own substep count so it
         // starts in agreement with the demo.
-        let mut editor = EditorState::new(&context.device, context.surface_format(), window.winit_window());
+        let mut editor =
+            EditorState::new(&context.device, context.surface_format(), window.winit_window());
         editor.editor.sim_controls.substeps = self.scene.physics.substeps;
+        editor.editor.toolbar.status = format!("demo: {}", self.demo.name());
 
         self.gpu = Some(Gpu { context, cache, forward });
         self.editor = Some(editor);
         Ok(())
+    }
+}
+
+/// Consume the toolbar's save/load requests for this frame. Save writes the
+/// current scene; Load parses a scene, rebuilds the GPU cache from its asset
+/// table, and (only on success) swaps it in. Outcomes are written back to the
+/// toolbar's status line.
+fn handle_scene_io(
+    scene: &mut Scene,
+    gpu: &mut Gpu,
+    editor: &mut EditorState,
+    asset_manager: &mut AssetManager,
+) {
+    let save = std::mem::take(&mut editor.editor.toolbar.save_requested);
+    let load = std::mem::take(&mut editor.editor.toolbar.load_requested);
+    if !save && !load {
+        return;
+    }
+    let path = PathBuf::from(&editor.editor.toolbar.path);
+
+    if save {
+        editor.editor.toolbar.status = match elderforge_scene::serializer::save_scene(scene, &path) {
+            Ok(()) => format!("saved {}", path.display()),
+            Err(err) => format!("save failed: {err}"),
+        };
+    }
+
+    if load {
+        match elderforge_scene::loader::load_scene(&path) {
+            Ok(loaded) => {
+                match asset_manager.realize(&loaded, &gpu.context.device, &gpu.context.queue) {
+                    Ok(new_cache) => {
+                        gpu.cache = new_cache;
+                        *scene = loaded;
+                        // The selected entity belonged to the old scene; clear
+                        // it, and re-sync the substep slider to the new scene.
+                        editor.editor.hierarchy.selected = None;
+                        editor.editor.sim_controls.substeps = scene.physics.substeps;
+                        editor.editor.toolbar.status = format!("loaded {}", path.display());
+                    }
+                    Err(err) => {
+                        editor.editor.toolbar.status = format!("load failed (assets): {err}");
+                    }
+                }
+            }
+            Err(err) => {
+                editor.editor.toolbar.status = format!("load failed: {err}");
+            }
+        }
     }
 }

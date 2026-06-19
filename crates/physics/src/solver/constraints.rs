@@ -3,13 +3,14 @@
 //! ECS `Joint` component references.
 
 use elderforge_core::math::Vec3;
+use serde::{Deserialize, Serialize};
 
 use crate::body::BodyHandle;
 
 /// XPBD compliance (inverse stiffness). Zero means perfectly rigid.
 pub type Compliance = f32;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum JointKind {
     Fixed,
     Ball,

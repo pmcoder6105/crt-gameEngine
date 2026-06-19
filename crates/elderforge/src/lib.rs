@@ -1,6 +1,8 @@
-//! Library half of the elderforge crate. Holds the demo scene definitions so
-//! both the binary (which selects one via `--demo`) and the headless render
-//! tests can build the exact same scenes. The event loop, `App`, and per-frame
-//! systems live in the binary (`main.rs`).
+//! Library half of the elderforge crate. Holds the demo scene definitions and
+//! the app-level asset realization (scene asset table → GPU cache) so both the
+//! binary (which selects a demo via `--demo`) and the headless render/IO tests
+//! share the exact same code. The event loop, `App`, and per-frame systems live
+//! in the binary (`main.rs`).
 
+pub mod assets;
 pub mod demos;

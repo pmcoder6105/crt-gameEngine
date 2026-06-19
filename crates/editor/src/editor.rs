@@ -2,11 +2,12 @@
 
 use elderforge_scene::Scene;
 
-use crate::panels::{AssetBrowser, Hierarchy, Inspector, Overlays, SimControls, Stats};
+use crate::panels::{AssetBrowser, Hierarchy, Inspector, Overlays, SimControls, Stats, Toolbar};
 use crate::state::EditorStats;
 
 #[derive(Default)]
 pub struct Editor {
+    pub toolbar: Toolbar,
     pub hierarchy: Hierarchy,
     pub inspector: Inspector,
     pub sim_controls: SimControls,
@@ -28,6 +29,9 @@ impl Editor {
 
     /// Run one editor frame. Call inside the egui pass.
     pub fn ui(&mut self, ctx: &egui::Context, scene: &mut Scene) {
+        // Toolbar across the top: scene save/load. The app consumes the
+        // recorded requests after this frame's UI runs.
+        egui::TopBottomPanel::top("toolbar").show(ctx, |ui| self.toolbar.ui(ui));
         egui::Window::new("Scene Hierarchy").show(ctx, |ui| self.hierarchy.ui(ui, scene));
         // Selection flows from the hierarchy into the inspector.
         self.inspector.selected = self.hierarchy.selected;

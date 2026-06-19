@@ -1,11 +1,13 @@
 //! Physics material: friction (static + dynamic), restitution, density.
 
+use serde::{Deserialize, Serialize};
+
 /// Surface and bulk properties of a body, sampled by the contact solver.
 ///
 /// Friction is split into a *static* coefficient (the Coulomb cone that holds a
 /// resting contact in place) and a *dynamic* coefficient (the kinetic friction
 /// that resists an already-sliding contact). Physically `static >= dynamic`.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct PhysicsMaterial {
     /// Static friction coefficient (μ_s): the tangential force a contact can
     /// resist before it starts to slide, as a fraction of the normal force.

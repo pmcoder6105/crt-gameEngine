@@ -9,3 +9,7 @@ elderforge-ecs = { path = "../ecs" }
 elderforge-physics = { path = "../physics" }
 thiserror = { workspace = true }
 log = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+image = { workspace = true }
+gltf = { workspace = true }

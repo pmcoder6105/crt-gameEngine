@@ -13,10 +13,11 @@ pub use sphere::Sphere;
 pub use trimesh::TriMesh;
 
 use elderforge_core::math::Vec3;
+use serde::{Deserialize, Serialize};
 
 use crate::broadphase::Aabb;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ColliderShape {
     Sphere(Sphere),
     Box(BoxShape),

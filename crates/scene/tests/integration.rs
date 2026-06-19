@@ -25,8 +25,11 @@ fn save_and_reload_scene() {
     std::fs::create_dir_all(&dir).expect("create temp dir");
     let path = dir.join("roundtrip.escene");
 
-    let scene = Scene::new();
+    // The scene's own name is what round-trips (not the file name): save a
+    // distinctively named scene and confirm the loaded copy keeps it.
+    let mut scene = Scene::new();
+    scene.name = "my level".to_string();
     elderforge_scene::serializer::save_scene(&scene, &path).expect("save scene");
     let loaded = elderforge_scene::loader::load_scene(&path).expect("load scene");
-    assert_eq!(loaded.name, "roundtrip");
+    assert_eq!(loaded.name, "my level");
 }

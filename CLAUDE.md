@@ -470,6 +470,39 @@ cargo test               # run all unit + integration tests
   capsule asset and now exercises all 5 demos (sandbox 66% / stress 66% lit).
   Full workspace green; both new demos verified clean under
   `--demo <name> --smoke-test` (7 / 502 entities).
+- Completed: asset pipeline + `.escene` scene serialization + editor save/load
+  (phase 12). **Mesh loading** (`scene/src/assets/mesh.rs`): a hand-rolled OBJ
+  parser (v/vn/vt + `f` in all four vertex forms, negative indices, polygon fan
+  triangulation, smooth-normal recompute when a file omits normals) and a glTF
+  importer via the `gltf` crate (concatenates every primitive of every mesh,
+  offsetting index runs), both producing a `MeshData` (parallel positions/
+  normals/uvs + triangle indices). **Texture loading** (`assets/texture.rs`):
+  PNG/JPEG → RGBA8 `TextureData` via the `image` crate (KTX stays
+  UnsupportedFormat — `image` can't decode it); `renderer::GpuTexture::from_pixels`
+  uploads it as an sRGB 2D texture (the old TODO). **`.escene` format** (serde →
+  JSON): leaf physics/ECS types now derive Serialize/Deserialize (glam `serde`
+  feature enabled in core; `Handle<T>` gets manual `[index, generation]` impls),
+  so the format crate (`scene/src/format.rs`) only adds the document structs +
+  a `RigidBodyDoc` (immovable mass serialized as `None`, not JSON-illegal
+  `INFINITY`; inverse mass/inertia recomputed on load). A `SceneAssets` table on
+  `Scene` is the resource-handle authority: it maps each `MeshHandle`/`TextureHandle`/
+  `MaterialHandle` to a stable `MeshSource`(`Builtin`/`File`)/`TextureSource`/
+  `MaterialDef`, deduping by source, so handles survive a round-trip and the same
+  path loads once. `serializer::save_scene` / `loader::load_scene` write/read the
+  whole scene (name, world config, all bodies, asset table, every entity's
+  components). **Editor**: a top `Toolbar` panel (path field + Save/Load buttons)
+  records requests; the app's `handle_scene_io` services them — save writes
+  directly, load parses + rebuilds the GPU cache from the new scene's asset table
+  before swapping it in. **App asset realization** (`elderforge::assets::AssetManager`,
+  now in the lib): builds a `ResourceCache` from a scene's asset table, inserting
+  each resource at the handle the scene assigned (`ResourceCache::insert_*_at`),
+  builtins regenerated from `primitives::*` and files loaded (CPU decode memoized
+  by path). `App::init` now registers builtins in `scene.assets` then realizes,
+  so demos serialize losslessly. Tests: OBJ/texture/registry unit tests; a
+  20-entity mixed-component `roundtrip` test (save → reload → exact match of
+  name/world/bodies/assets + per-component counts + handle resolution); and a
+  GPU `scene_io` test (realize → save → load → re-realize, all handles resolve).
+  Full workspace green (133 tests).
 - Next: angular contact response (contacts are still linear-only — fine for
   centered/axis-aligned cases, but a box can't yet tip over a contact edge or
   pick up spin from an off-center hit), persistent BVH refit inside the world
@@ -624,3 +657,43 @@ platform-general 1600×900). The binary parses the flag and overrides
 windowing layer keeps a sensible standalone default. Demo selection
 (`--demo`) and resolution (`--resolution`) are independent flags parsed the
 same hand-rolled way (no clap dependency).
+
+2026-06-19 — The `.escene` format derives serde DIRECTLY on the leaf physics
+and ECS value types (PhysicsMaterial, body `Collider`, BodyKind, ColliderShape
++ shape structs, JointKind, and all six components) rather than mirroring them
+with DTOs — single source of truth, far less boilerplate. To support this,
+core enables glam's `serde` feature (so Vec3/Quat/Vec4 serialize) and gives
+`Handle<T>` MANUAL serde impls serializing as `[index, generation]` (a derive
+would wrongly demand `T: Serialize`, but the markers are uninhabited). physics
+and ecs gained a `serde` dependency. The ONE type that does NOT serialize
+directly is `RigidBody`: it carries `mass = INFINITY` for immovable bodies
+(not representable in JSON — serde_json emits `null`) plus derived/runtime
+fields, so it goes through `RigidBodyDoc` (immovable mass stored as `None`;
+inverse mass/inertia and `prev_*` recomputed by the constructors on load). The
+trade-off accepted: the file format is now coupled to internal type/field
+names, so renaming a serialized field is a format change (caught at compile
+time, which is the point).
+
+2026-06-19 — `SceneAssets` (on `Scene`) is the single authority for resource
+handles, NOT the renderer's `ResourceCache`. Registering a `MeshSource`/
+`TextureSource`/`MaterialDef` returns a handle (deduped by source); the
+serializer writes the table in handle-index order (so handles are implicit in
+list position), and the app realizes the table into a fresh `ResourceCache` at
+exactly those handles via `insert_*_at`. This is why a loaded scene's
+`MeshRenderer` handles resolve with no remap: the cache is rebuilt to match the
+scene, not the other way round. The scene crate stays GPU-free (it only names
+assets); the app (`elderforge::assets::AssetManager`, in the LIB so tests can
+reach it) owns decode + upload, memoizing CPU decode by path. Builtin
+primitives are stored as `MeshSource::Builtin(name)` and regenerated from
+`primitives::*` on realize — so demos serialize and reload losslessly without
+baking primitive geometry into the file.
+
+2026-06-19 — Editor Save/Load follows the same intent-recording pattern as the
+sim controls: the `Toolbar` panel only sets `save_requested`/`load_requested`
+(+ a path field), and the app's `handle_scene_io` consumes them each frame.
+Loading can't live in the editor crate — it replaces the whole scene and must
+rebuild the GPU cache through the renderer, which only the app owns — so the
+editor hands the request up. On a successful load the app swaps the scene,
+rebuilds the cache from its asset table, clears the (now-dangling) selection,
+and reseeds the substep slider; failures are reported in the toolbar status
+line and leave the running scene untouched.

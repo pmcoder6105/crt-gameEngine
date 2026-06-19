@@ -4,7 +4,12 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-glam = { workspace = true }
+# `serde` feature so engine math types (Vec3/Quat/Vec4/…) serialize directly,
+# letting the scene crate's .escene DTOs derive Serialize/Deserialize over them.
+glam = { workspace = true, features = ["serde"] }
 log = { workspace = true }
 env_logger = { workspace = true }
 thiserror = { workspace = true }
+# Handles serialize as a [index, generation] pair so scene DTOs can reference
+# resources directly (manual impls in handles.rs — no `T: Serialize` bound).
+serde = { workspace = true }

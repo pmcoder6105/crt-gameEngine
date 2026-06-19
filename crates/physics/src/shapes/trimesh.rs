@@ -1,10 +1,11 @@
 use elderforge_core::math::Vec3;
+use serde::{Deserialize, Serialize};
 
 use crate::broadphase::Aabb;
 
 /// Triangle mesh collider (static geometry only).
 /// // TODO: internal BVH over triangles for fast queries.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct TriMesh {
     pub vertices: Vec<Vec3>,
     pub indices: Vec<[u32; 3]>,

@@ -5,4 +5,4 @@
 
 pub mod components;
 
-pub use hecs::{Entity, World};
+pub use hecs::{Entity, EntityBuilder, World};

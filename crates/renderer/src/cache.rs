@@ -46,6 +46,26 @@ impl ResourceCache {
         handle
     }
 
+    /// Store a mesh at a caller-chosen handle, replacing any existing entry.
+    ///
+    /// Used when the handle authority lives elsewhere — e.g. the scene's
+    /// `SceneAssets` table assigns handles, and the app realizes those assets
+    /// into the cache at exactly those handles so a loaded scene's
+    /// `MeshRenderer` components resolve without a remap.
+    pub fn insert_mesh_at(&mut self, handle: MeshHandle, mesh: GpuMesh) {
+        self.meshes.insert(handle, mesh);
+    }
+
+    /// Store a texture at a caller-chosen handle. See [`insert_mesh_at`](Self::insert_mesh_at).
+    pub fn insert_texture_at(&mut self, handle: TextureHandle, texture: GpuTexture) {
+        self.textures.insert(handle, texture);
+    }
+
+    /// Store a material at a caller-chosen handle. See [`insert_mesh_at`](Self::insert_mesh_at).
+    pub fn insert_material_at(&mut self, handle: MaterialHandle, material: PbrMaterial) {
+        self.materials.insert(handle, material);
+    }
+
     pub fn mesh(&self, handle: MeshHandle) -> Option<&GpuMesh> {
         self.meshes.get(&handle)
     }

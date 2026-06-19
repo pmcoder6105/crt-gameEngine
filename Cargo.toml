@@ -32,3 +32,10 @@ anyhow = "1"
 log = "0.4"
 env_logger = "0.11"
 pollster = "0.4"
+# Scene serialization (.escene JSON) and asset decoding.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Texture decode: PNG/JPEG only, no default codecs we don't use.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# glTF mesh import (.gltf/.glb + buffers).
+gltf = "1"

@@ -7,3 +7,5 @@ edition.workspace = true
 elderforge-core = { path = "../core" }
 elderforge-physics = { path = "../physics" }
 hecs = { workspace = true }
+# Components derive Serialize/Deserialize for the scene crate's .escene format.
+serde = { workspace = true }

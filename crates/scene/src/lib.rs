@@ -1,6 +1,7 @@
 //! Scene graph, serialization (.escene JSON), and asset loading.
 
 pub mod assets;
+pub mod format;
 pub mod loader;
 pub mod scene;
 pub mod serializer;

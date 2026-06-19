@@ -56,6 +56,21 @@ impl<T> fmt::Debug for Handle<T> {
     }
 }
 
+// Manual serde impls: a handle serializes as an `[index, generation]` pair,
+// independent of its marker type `T`. A derive would (wrongly) require
+// `T: Serialize`, but the markers (`MeshMarker`, …) are uninhabited.
+impl<T> serde::Serialize for Handle<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        (self.index, self.generation).serialize(serializer)
+    }
+}
+impl<'de, T> serde::Deserialize<'de> for Handle<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let (index, generation) = <(u32, u32)>::deserialize(deserializer)?;
+        Ok(Handle::new(index, generation))
+    }
+}
+
 /// Marker types for engine-wide resource handles.
 pub enum MeshMarker {}
 pub enum TextureMarker {}

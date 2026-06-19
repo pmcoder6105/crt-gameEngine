@@ -2,6 +2,7 @@
 
 use elderforge_core::math::{Mat3, Quat, Vec3};
 use elderforge_core::Handle;
+use serde::{Deserialize, Serialize};
 
 use crate::broadphase::Aabb;
 use crate::material::PhysicsMaterial;
@@ -13,7 +14,7 @@ use crate::material::PhysicsMaterial;
 /// world still owns the body storage; the handle only indexes into it.
 pub type BodyHandle = Handle<RigidBody>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BodyKind {
     Dynamic,
     Kinematic,
@@ -24,7 +25,7 @@ pub enum BodyKind {
 /// pipeline (semi-implicit Euler + impulse resolution). The full
 /// [`ColliderShape`](crate::ColliderShape) / GJK-EPA path supersedes this
 /// once the broadphase BVH lands in Phase 6.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Collider {
     /// Solid sphere of the given radius, centered on the body position.
     Sphere { radius: f32 },

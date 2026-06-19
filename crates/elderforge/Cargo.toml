@@ -15,6 +15,9 @@ anyhow = { workspace = true }
 log = { workspace = true }
 # The egui <-> window/wgpu glue now lives in the editor crate (EditorState); the
 # binary just forwards platform events to it and lets it paint into the frame.
+# wgpu is named directly only for the asset-realization step, which uploads
+# loaded meshes/textures to the device behind the RenderContext.
+wgpu = { workspace = true }
 
 [dev-dependencies]
 # Headless GPU integration tests (offscreen render + readback) talk to wgpu
