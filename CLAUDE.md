@@ -360,6 +360,28 @@ cargo test               # run all unit + integration tests
   10-box stack stable 600 frames (no drift/popping); pendulum period 0.34%
   off analytic. Full workspace green (100 tests); binary still falls/
   settles the 50-body scene under XPBD.
+- Completed: three demo scenes in the elderforge crate, selectable with
+  `cargo run -- --demo <stacking|pendulum|avalanche>` (defaults to stacking;
+  unknown names error with the valid list). Split the elderforge crate into a
+  lib (`src/lib.rs` -> `pub mod demos`) + bin so both the binary and the
+  headless tests build the identical scenes; `App::new(demo)` now calls
+  `Demo::setup(scene, &DemoAssets)` instead of the old hard-coded 50-cube
+  `spawn_scene`. Added a `primitives::sphere(radius, sectors, stacks)` UV
+  sphere (smooth outward normals) to the renderer, uploaded alongside cube +
+  plane into `DemoAssets`. Demos: **stacking** — 20 unit boxes stacked with a
+  small gap, matte (restitution 0), settling into a stable axis-aligned tower
+  (the solver's best case, no jitter); **pendulum** — a fixed anchor + 10
+  spheres on rigid (compliance-0) distance constraints, released horizontal so
+  it swings as a multi-link rope, over a ground plane for depth; **avalanche**
+  — 200 spheres dropped above a tilted half-space ramp (downhill +X) that feeds
+  onto a flat floor, boxed in by invisible static half-space walls so they pile
+  against the far wall (substeps lowered to 10 for throughput, restitution 0.1
+  to bleed energy). Verified: `tests/demos_render.rs` builds each demo through
+  the real `Demo::setup`, steps 90 frames (asserting positions stay finite),
+  renders offscreen + reads back (stacking 46%, pendulum 49%, avalanche 64%
+  lit; PPMs dumped to `$TMPDIR/elderforge_demo_<name>.ppm`), plus each runs
+  clean under `cargo run -- --demo <name> --smoke-test` (22 / 13 / 203
+  entities). Full workspace suite green.
 - Next: friction in the contact solver, angular contact response (contacts
   are linear-only — fine for centered/axis-aligned cases), persistent
   BVH refit inside the world (currently rebuilt per substep), and the real
@@ -411,6 +433,16 @@ keep their dedicated contact generator (`world::halfspace_contact`) since
 they're unbounded and can't go through GJK. XPBD contacts are linear-only
 (no angular term) — exact for centered/axis-aligned contacts, which is why
 the box-stack test uses axis-aligned cubes.
+
+2026-06-17 — The elderforge crate now has BOTH a lib (`src/lib.rs`) and a bin
+(`src/main.rs`). Demo scene definitions live in the lib (`elderforge::demos`)
+so the binary and the headless render tests construct byte-identical scenes
+from one source; the event loop, `App`, and per-frame `systems` stay bin-only.
+Demos are selected at runtime via `--demo <name>` (one binary dispatching to
+scene setups), NOT separate `[[bin]]` targets — `cargo run -- --demo stacking`
+is the intended invocation. `DemoAssets` carries only renderer handles (cube /
+sphere / plane meshes + material); the caller uploads the meshes (it has the
+GPU device) and each demo picks what it needs.
 
 2026-06-16 — GJK/EPA run on shape *cores* with a separate rounding `margin`
 (sphere = point + r, capsule = segment + r, box/hull = exact polytope,

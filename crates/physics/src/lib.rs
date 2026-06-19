@@ -13,8 +13,9 @@ pub mod solver;
 pub mod world;
 
 pub use body::{BodyHandle, BodyKind, Collider, RigidBody, SoftBody};
-pub use material::PhysicsMaterial;
+pub use material::{CombinedMaterial, PhysicsMaterial};
 pub use shapes::ColliderShape;
+pub use solver::{BallJoint, FixedJoint, HingeJoint, Joint, PrismaticJoint};
 pub use world::PhysicsWorld;
 
 use thiserror::Error;

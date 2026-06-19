@@ -69,6 +69,10 @@ pub struct RigidBody {
     pub prev_position: Vec3,
     /// Orientation. Quaternion; integrated from `angular_velocity`.
     pub rotation: Quat,
+    /// Orientation at the start of the current XPBD substep. Mirrors
+    /// `prev_position` for the angular degrees of freedom: the solver derives
+    /// angular velocity from `rotation` relative to `prev_rotation`.
+    pub prev_rotation: Quat,
     pub linear_velocity: Vec3,
     pub angular_velocity: Vec3,
     /// Mass in kg. `f32::INFINITY` for immovable bodies (see `inv_mass`).
@@ -81,7 +85,18 @@ pub struct RigidBody {
     pub inv_inertia_tensor: Mat3,
     pub material: PhysicsMaterial,
     pub collider: Collider,
+    /// Whether the body is asleep. Asleep bodies skip integration and are only
+    /// re-tested for collisions when an awake body is nearby; contact with a
+    /// non-sleeping body wakes them. See [`PhysicsWorld`](crate::PhysicsWorld).
     pub sleeping: bool,
+    /// Consecutive frames the body's linear and angular speed have stayed below
+    /// the world's sleep thresholds. The solver puts an island to sleep once
+    /// every member has been quiet for long enough.
+    pub(crate) low_energy_frames: u32,
+    /// Tombstone set by [`PhysicsWorld::remove_rigid_body`]. Removed bodies keep
+    /// their slot (handles stay generationally stale) but are skipped by every
+    /// solver phase and never woken.
+    pub(crate) removed: bool,
 }
 
 impl RigidBody {
@@ -94,6 +109,7 @@ impl RigidBody {
             position,
             prev_position: position,
             rotation: Quat::IDENTITY,
+            prev_rotation: Quat::IDENTITY,
             linear_velocity: Vec3::ZERO,
             angular_velocity: Vec3::ZERO,
             mass,
@@ -102,6 +118,8 @@ impl RigidBody {
             material: PhysicsMaterial::default(),
             collider,
             sleeping: false,
+            low_energy_frames: 0,
+            removed: false,
         }
     }
 
@@ -113,6 +131,7 @@ impl RigidBody {
             position,
             prev_position: position,
             rotation: Quat::IDENTITY,
+            prev_rotation: Quat::IDENTITY,
             linear_velocity: Vec3::ZERO,
             angular_velocity: Vec3::ZERO,
             mass: f32::INFINITY,
@@ -121,6 +140,8 @@ impl RigidBody {
             material: PhysicsMaterial::default(),
             collider,
             sleeping: false,
+            low_energy_frames: 0,
+            removed: false,
         }
     }
 
@@ -137,6 +158,12 @@ impl RigidBody {
         self
     }
 
+    /// Set the angular velocity and return `self`.
+    pub fn with_angular_velocity(mut self, velocity: Vec3) -> Self {
+        self.angular_velocity = velocity;
+        self
+    }
+
     /// Translational kinetic energy, ½·m·v². Zero for immovable bodies.
     pub fn kinetic_energy(&self) -> f32 {
         if self.inv_mass == 0.0 {
@@ -145,16 +172,43 @@ impl RigidBody {
             0.5 * self.mass * self.linear_velocity.length_squared()
         }
     }
+
+    /// A body the solver should integrate and move: dynamic, finite-mass, and
+    /// not tombstoned. (Asleep bodies are still simulatable; they're just
+    /// resting.)
+    pub(crate) fn is_dynamic(&self) -> bool {
+        !self.removed && self.kind == BodyKind::Dynamic && self.inv_mass > 0.0
+    }
 }
 
-/// Inverse inertia tensor for a collider of the given mass. A `Sphere` uses
-/// the solid-sphere tensor I = ⅖·m·r²; anything else gets zero (no rotational
-/// response), which is fine for the minimal pipeline.
+/// Inverse inertia tensor for a collider of the given mass, in body space.
+///
+/// `Sphere` uses the solid-sphere tensor I = ⅖·m·r²; `Box` uses the solid-box
+/// tensor (per axis I = ⅓·m·(h_j² + h_k²) for the two *other* half-extents).
+/// The unbounded half-space gets zero (it is only ever a static body).
 fn inv_inertia_for(collider: &Collider, mass: f32) -> Mat3 {
+    if mass <= 0.0 {
+        return Mat3::ZERO;
+    }
     match collider {
-        Collider::Sphere { radius } if mass > 0.0 && *radius > 0.0 => {
+        Collider::Sphere { radius } if *radius > 0.0 => {
             let inertia = 0.4 * mass * radius * radius;
             Mat3::from_diagonal(Vec3::splat(1.0 / inertia))
+        }
+        Collider::Box { half_extents } => {
+            let h = *half_extents;
+            // Solid cuboid: I_x = m/3·(h_y² + h_z²), and cyclically.
+            let i = Vec3::new(
+                mass / 3.0 * (h.y * h.y + h.z * h.z),
+                mass / 3.0 * (h.x * h.x + h.z * h.z),
+                mass / 3.0 * (h.x * h.x + h.y * h.y),
+            );
+            let inv = Vec3::new(
+                if i.x > 0.0 { 1.0 / i.x } else { 0.0 },
+                if i.y > 0.0 { 1.0 / i.y } else { 0.0 },
+                if i.z > 0.0 { 1.0 / i.z } else { 0.0 },
+            );
+            Mat3::from_diagonal(inv)
         }
         _ => Mat3::ZERO,
     }
@@ -201,6 +255,18 @@ mod tests {
         assert!((body.inv_mass - 0.25).abs() < 1e-6);
         // Solid sphere I = 0.4 * 4 * 1 = 1.6 -> inverse 0.625 on the diagonal.
         assert!((body.inv_inertia_tensor.x_axis.x - 0.625).abs() < 1e-6);
+    }
+
+    #[test]
+    fn box_collider_gets_solid_cuboid_inertia() {
+        // Unit cube (half-extents 0.5), mass 2: I_x = 2/3·(0.25+0.25) = 1/3.
+        let body = RigidBody::dynamic(Vec3::ZERO, 2.0, Collider::Box { half_extents: Vec3::splat(0.5) });
+        let expected_inv = 1.0 / (2.0 / 3.0 * 0.5);
+        assert!((body.inv_inertia_tensor.x_axis.x - expected_inv).abs() < 1e-5);
+        assert!((body.inv_inertia_tensor.y_axis.y - expected_inv).abs() < 1e-5);
+        assert!((body.inv_inertia_tensor.z_axis.z - expected_inv).abs() < 1e-5);
+        // Off-diagonal terms stay zero for an axis-aligned cuboid.
+        assert_eq!(body.inv_inertia_tensor.x_axis.y, 0.0);
     }
 
     #[test]

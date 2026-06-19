@@ -4,6 +4,7 @@
 mod app;
 mod systems;
 
+use elderforge::demos::Demo;
 use elderforge_platform::{EngineEvent, FrameControl, WindowConfig};
 
 fn main() -> anyhow::Result<()> {
@@ -15,7 +16,11 @@ fn main() -> anyhow::Result<()> {
     let smoke_test = std::env::args().any(|arg| arg == "--smoke-test");
     let max_frames = smoke_test.then_some(30u64);
 
-    let mut app = app::App::new();
+    // `--demo <name>` selects which scene to run; defaults to the stacking demo.
+    let demo = parse_demo()?;
+    log::info!("running demo '{}'", demo.name());
+
+    let mut app = app::App::new(demo);
     let mut frame_count = 0u64;
     let mut fatal: Option<anyhow::Error> = None;
     elderforge_platform::run_event_loop(WindowConfig::default(), |_input, events, window| {
@@ -40,4 +45,26 @@ fn main() -> anyhow::Result<()> {
 
     log::info!("Elderforge exiting");
     Ok(())
+}
+
+/// Read the demo named by `--demo <name>` from the command line, defaulting to
+/// the stacking demo when the flag is absent. Errors on an unknown name with
+/// the list of valid demos.
+fn parse_demo() -> anyhow::Result<Demo> {
+    let mut args = std::env::args();
+    while let Some(arg) = args.next() {
+        if arg == "--demo" {
+            let name = args
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("--demo requires a name (one of {})", demo_list()))?;
+            return Demo::from_name(&name)
+                .ok_or_else(|| anyhow::anyhow!("unknown demo '{name}' (expected one of {})", demo_list()));
+        }
+    }
+    Ok(Demo::Stacking)
+}
+
+/// Comma-separated list of valid demo names, for error messages.
+fn demo_list() -> String {
+    Demo::all().iter().map(|d| d.name()).collect::<Vec<_>>().join(", ")
 }
