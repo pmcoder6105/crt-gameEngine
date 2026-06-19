@@ -5,6 +5,13 @@ edition.workspace = true
 
 [dependencies]
 elderforge-ecs = { path = "../ecs" }
+elderforge-physics = { path = "../physics" }
 elderforge-scene = { path = "../scene" }
 egui = { workspace = true }
+# egui platform/render glue. egui-winit re-exports the winit version it needs,
+# so this crate reaches winit *only* through that bridge (the documented
+# exception to "no winit outside platform"). egui-wgpu re-exports wgpu likewise.
+egui-winit = { workspace = true }
+egui-wgpu = { workspace = true }
+wgpu = { workspace = true }
 log = { workspace = true }

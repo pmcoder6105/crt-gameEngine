@@ -1,25 +1,20 @@
-//! Collect draw calls from the scene and submit them to the renderer.
+//! Collect draw calls from the scene and record them into the current frame.
 
 use elderforge_core::math::Mat4;
 use elderforge_ecs::components::{Camera, MeshRenderer, Transform};
-use elderforge_renderer::{Draw, ForwardPass, RenderContext, ResourceCache};
+use elderforge_renderer::{Draw, ForwardPass, FrameContext, RenderContext, ResourceCache};
 use elderforge_scene::Scene;
 
-pub fn run(
+/// Record the 3D forward pass for `scene` into `frame`. The caller owns the
+/// frame lifecycle (acquire / present) so it can also record the editor's egui
+/// pass into the same encoder before presenting.
+pub fn record(
     scene: &Scene,
-    context: &mut RenderContext,
+    context: &RenderContext,
     cache: &ResourceCache,
     forward: &mut ForwardPass,
+    frame: &mut FrameContext,
 ) {
-    let mut frame = match context.frame() {
-        Ok(frame) => frame,
-        Err(err) => {
-            // Transient (e.g. surface timeout mid-resize): skip this frame.
-            log::warn!("render: skipping frame: {err}");
-            return;
-        }
-    };
-
     let (width, height) = context.size();
     let aspect = width as f32 / height.max(1) as f32;
     let view_proj = active_camera(scene, aspect).unwrap_or(Mat4::IDENTITY);
@@ -42,7 +37,6 @@ pub fn run(
         view_proj,
         &draws,
     );
-    context.present(frame);
 }
 
 /// View-projection of the first active camera entity, built from its `Camera`

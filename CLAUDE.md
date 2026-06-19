@@ -382,10 +382,68 @@ cargo test               # run all unit + integration tests
   lit; PPMs dumped to `$TMPDIR/elderforge_demo_<name>.ppm`), plus each runs
   clean under `cargo run -- --demo <name> --smoke-test` (22 / 13 / 203
   entities). Full workspace suite green.
-- Next: friction in the contact solver, angular contact response (contacts
-  are linear-only — fine for centered/axis-aligned cases), persistent
-  BVH refit inside the world (currently rebuilt per substep), and the real
-  PBR render pass.
+- Completed: production joints, contact friction, sleeping, and a split
+  friction material. `solver/joints.rs` adds the full XPBD rigid-body
+  primitives — world-space inverse inertia, a positional solve with lever-arm
+  generalized mass `w = 1/m + (r×n)ᵀI⁻¹(r×n)`, an angular solve, and an
+  angle-limit helper (Müller et al. 2020) — and four joints on top:
+  `BallJoint` (point-to-point), `HingeJoint` (axis alignment + optional swing
+  limit), `PrismaticJoint` (slide axis, perpendicular + orientation lock +
+  travel limit), `FixedJoint` (weld). The world exposes
+  `add_{ball,hinge,prismatic,fixed}_joint`, projects joints inside the substep
+  loop, and now derives **angular** velocity from the orientation delta (it
+  only derived linear before). `Collider::Box` gained a real solid-cuboid
+  inverse inertia tensor (was zero) so jointed boxes actually respond to torque
+  — safe for the existing linear-only contact path, which applies no torque.
+  `ContactConstraint` gained Coulomb friction: position-level **static**
+  friction that cancels tangential sliding while it stays inside the cone
+  `λ_t ≤ μ_s·λ_n`, plus a velocity-level **dynamic** friction pass (μ_d).
+  `PhysicsMaterial` split `friction` into `static_friction`/`dynamic_friction`
+  and grew `combine()` → `CombinedMaterial` (geometric-mean friction, max
+  restitution), used by `make_contact`. **Sleeping** is island-based: a body
+  accrues quiet frames when its linear+angular speed stays under the world
+  thresholds, and an island (union-find over contacts/joints/distance
+  constraints) sleeps only when every member is ready, so a stack never
+  half-sleeps; asleep bodies skip integration, contact with an awake body wakes
+  them, and `generate_contacts` short-circuits to zero broadphase/narrowphase
+  cost when nothing is awake (`awake_body_count()` / `last_narrowphase_tests()`
+  expose this). Removed bodies now use a dedicated `removed` tombstone instead
+  of overloading `sleeping`. Tests: `tests/joints.rs` (5 — each joint's
+  invariant + free DOF), `tests/friction.rs` (box on a slope holds below and
+  slides above the friction angle; transition tracks arctan μ), `tests/
+  sleeping.rs` (settled 5-box stack → 0 narrowphase tests; impact wakes it).
+  Physics at 62 lib tests; full workspace green.
+- Completed: live egui editor rendered through egui-wgpu, wired into the
+  binary. New `editor::state::EditorState` owns the three egui pieces —
+  `egui::Context`, `egui_winit::State`, `egui_wgpu::Renderer` — plus the panel
+  `Editor`, with `integrate_event` (winit event → egui input), `run_frame`
+  (lays out the panels over the `Scene`, tessellates → `EditorFrame` paint
+  jobs), and `paint` (uploads textures/buffers, records a `LoadOp::Load` pass
+  over the finished 3D frame; uses `RenderPass::forget_lifetime` for
+  egui-wgpu's `'static` pass). The editor crate gained egui-winit/egui-wgpu/wgpu
+  deps; the binary dropped its direct egui deps (the glue moved here). Platform
+  now forwards raw winit events to the frame closure (`&[RawWindowEvent]`, a
+  re-export) and exposes `WindowHandle::winit_window()` so egui_winit can read
+  the window — the one winit leak outside platform, for the egui bridge only.
+  `App` creates the `EditorState` lazily with the GPU, and each frame:
+  acquires one surface frame, runs the editor UI, steps physics **under the sim
+  controls**, records the 3D pass then the egui pass into the same encoder, and
+  presents. Panels: **Scene Hierarchy** (entities by id, click to select),
+  **Inspector** (edit Transform position/scale with live `DragValue`s, mirrored
+  into the entity's rigid body + wake so edits stick while simulating; rotation
+  shown as axis-angle), **Simulation** (Play/Pause, Step, timestep multiplier
+  0.1×–4×, substep slider seeded from the scene), **Stats** (frame time, physics
+  step time, FPS, entity/body/awake counts). Pause stops physics stepping while
+  rendering continues; Step advances exactly one fixed tick; the multiplier
+  scales `FixedTimestep` input; the substep slider drives `physics.substeps`.
+  `systems::render::run` became `record` (no acquire/present — the app owns the
+  frame so egui can share it); the old `systems::editor` stub is gone. Verified
+  on Metal: `--smoke-test` opens the window, paints 30 editor+3D frames, exits
+  clean; `window_smoke`/`scene_render`/`demos_render` all green.
+- Next: angular contact response (contacts are still linear-only — fine for
+  centered/axis-aligned cases, but a box can't yet tip over a contact edge or
+  pick up spin from an off-center hit), persistent BVH refit inside the world
+  (currently rebuilt per substep), and the real PBR render pass.
 
 ---
 
@@ -452,3 +510,58 @@ analytically exact (no EPA on curved surfaces) and limits EPA to genuine
 polytopes. EPA reconstructs its own origin-enclosing tetrahedron and skips
 faces it can't expand, to survive the box-vs-box degeneracy (Minkowski
 difference of two boxes is a box, often leaving the origin on a face).
+
+2026-06-18 — Joints (`solver/joints.rs`) use the FULL XPBD rigid-body
+machinery — anchor lever arms + world-space inverse inertia, so they apply
+torque and constrain orientation — even though world *contacts* stay
+linear-only (per the 2026-06-16 entry). The two paths are deliberately
+asymmetric: contacts are exact for centered/axis-aligned cases and angular
+contact response is still future work, but joints would be meaningless
+without it. This is why `Collider::Box` now carries a real inverse inertia
+tensor (was `Mat3::ZERO`): joints need it, and it's inert for linear contacts
+(which never apply torque), so the box-stack/avalanche behavior is unchanged.
+Joints are stored as a non-`dyn` `Joint` enum (Ball/Hinge/Prismatic/Fixed) in
+`PhysicsWorld::joints` and projected in the substep loop alongside distance
+and contact constraints. The substep now also derives angular velocity from
+the orientation delta (`2·imag(q·q_prevᵀ)/dt`); it derived only linear before.
+
+2026-06-18 — Sleeping is ISLAND-based, not per-body. A union-find over the
+substep's contact pairs plus joints and distance constraints groups dynamic
+bodies; an island sleeps only when its least-rested member has been quiet for
+`sleep_frames` frames, and any restless member keeps (or wakes) the whole
+island. Per-body sleeping was rejected because a stack would flicker — the
+last awake box perpetually re-waking the one beneath it. `generate_contacts`
+short-circuits to zero work when no dynamic body is awake (the cost win), and
+includes sleeping bodies in the broadphase only while something *is* awake, so
+an impact can find and wake them. `RigidBody::removed` is a separate tombstone
+for `remove_rigid_body` (it used to overload `sleeping`, which now conflicts
+with real sleeping — a removed body must never be woken by a contact).
+
+2026-06-18 — `PhysicsMaterial.friction` split into `static_friction` /
+`dynamic_friction` (Coulomb's two regimes). Contact friction is the paper's
+two-level scheme: position-level static friction fully cancels tangential
+slide while inside the cone `λ_t ≤ μ_s·λ_n` (all-or-nothing, not clamped, so
+it cleanly hands off), and a velocity-level pass applies dynamic friction μ_d
+to genuinely sliding contacts. Pair coefficients come from
+`PhysicsMaterial::combine` → `CombinedMaterial`: friction by geometric mean,
+restitution by max (this changes the old `restitution.min` combine in
+`make_contact`, but no test pinned it and equal-restitution scenarios are
+unaffected).
+
+2026-06-19 — The egui integration (`EditorState`) lives in the EDITOR crate,
+which therefore depends on egui-winit and egui-wgpu. This is the one
+deliberate exception to "no winit outside platform": egui_winit IS the
+winit↔egui input bridge, so the editor reaches winit *only* through it
+(`egui_winit::winit`), never the `winit` crate directly. To feed it, platform
+gained `WindowHandle::winit_window()` and forwards raw events to the frame
+closure as `&[RawWindowEvent]` (a re-export of `winit::event::WindowEvent`), so
+the binary wires egui without naming winit itself. The 3D pass and the egui
+pass share ONE surface frame/encoder: `App::update` acquires the frame, calls
+`systems::render::record` (which no longer presents — that's why it was renamed
+from `run`), then `EditorState::paint` (a `LoadOp::Load` pass over the 3D
+output), then presents. The simulation controls truly gate `PhysicsWorld`
+stepping — `App` reads `playing`/`single_step`/`timestep_multiplier`/`substeps`
+each frame; pause skips the step loop entirely (render still runs), and the
+multiplier scales the `FixedTimestep` input. Inspector Transform edits are
+mirrored back into the entity's rigid body (and wake it) so they're not
+immediately overwritten by the solver.

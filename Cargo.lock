@@ -603,8 +603,6 @@ name = "elderforge"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "egui",
- "egui-winit",
  "elderforge-core",
  "elderforge-ecs",
  "elderforge-editor",
@@ -641,9 +639,13 @@ name = "elderforge-editor"
 version = "0.1.0"
 dependencies = [
  "egui",
+ "egui-wgpu",
+ "egui-winit",
  "elderforge-ecs",
+ "elderforge-physics",
  "elderforge-scene",
  "log",
+ "wgpu",
 ]
 
 [[package]]

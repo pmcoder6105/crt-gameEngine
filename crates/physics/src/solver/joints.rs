@@ -187,9 +187,10 @@ fn limit_angle(
     if phi < lo || phi > hi {
         let target = phi.clamp(lo, hi);
         let n1_limited = Quat::from_axis_angle(axis, target) * n1;
-        // Drive n2 onto the (rotated) limit reference. Same convention as the
-        // axis-alignment correction below: corr = target × current.
-        let corr = n1_limited.cross(n2);
+        // Drive body B's reference `n2` back onto the limit reference. Per the
+        // `solve_angular` convention (body `b` rotates ∝ +corr, and rotating a
+        // vector `u` onto target `t` needs `u × t`), corr = n2 × n1_limited.
+        let corr = n2.cross(n1_limited);
         solve_angular(bodies, a, b, corr, 0.0, dt, lambda);
     }
 }

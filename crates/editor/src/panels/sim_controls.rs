@@ -12,10 +12,13 @@ pub struct SimControls {
 impl Default for SimControls {
     fn default() -> Self {
         Self {
-            playing: false,
+            // Start running so a freshly launched demo animates immediately;
+            // the user can pause to confirm rendering continues while stopped.
+            playing: true,
             single_step_requested: false,
             timestep_multiplier: 1.0,
-            substeps: 4,
+            // Overwritten by the app with the loaded scene's substep count.
+            substeps: 20,
         }
     }
 }
@@ -41,6 +44,6 @@ impl SimControls {
             egui::Slider::new(&mut self.timestep_multiplier, 0.1..=4.0)
                 .text("Timestep multiplier"),
         );
-        ui.add(egui::Slider::new(&mut self.substeps, 1..=16).text("Substeps"));
+        ui.add(egui::Slider::new(&mut self.substeps, 1..=32).text("Substeps"));
     }
 }

@@ -106,7 +106,20 @@ impl WindowHandle {
     pub fn surface_provider(&self) -> Arc<dyn SurfaceProvider> {
         self.window.clone()
     }
+
+    /// The underlying winit window. This is the one place a winit type leaves
+    /// the platform crate, and it exists solely for `egui_winit`, which needs
+    /// the concrete window to translate input and report platform output. No
+    /// other consumer should reach for it.
+    pub fn winit_window(&self) -> &Window {
+        &self.window
+    }
 }
+
+/// A raw winit window event, re-exported so the editor's `egui_winit` bridge
+/// can be fed without the binary naming `winit` directly. These are delivered
+/// to the frame closure alongside the normalized [`EngineEvent`]s.
+pub type RawWindowEvent = WindowEvent;
 
 /// Window-system handles a GPU surface can be created from. Blanket-implemented;
 /// consumers (the renderer) only need the supertraits, which `wgpu` accepts
@@ -129,15 +142,17 @@ pub enum FrameControl {
 ///
 /// The closure is called once per frame with the accumulated
 /// [`InputState`], the [`EngineEvent`]s received since the previous frame
-/// (already applied to the input state), and the [`WindowHandle`].
-/// [`EngineEvent::CloseRequested`] is delivered to the closure for any
-/// last-frame work, then the loop exits regardless of the returned value.
+/// (already applied to the input state), the corresponding **raw**
+/// [`RawWindowEvent`]s (for `egui_winit` to consume directly), and the
+/// [`WindowHandle`]. [`EngineEvent::CloseRequested`] is delivered to the
+/// closure for any last-frame work, then the loop exits regardless of the
+/// returned value.
 ///
 /// Blocks until the loop ends; on most platforms it must be called from
 /// the main thread.
 pub fn run_event_loop<F>(config: WindowConfig, frame: F) -> Result<(), WindowError>
 where
-    F: FnMut(&mut InputState, &[EngineEvent], &WindowHandle) -> FrameControl,
+    F: FnMut(&mut InputState, &[EngineEvent], &[RawWindowEvent], &WindowHandle) -> FrameControl,
 {
     let event_loop = EventLoop::new().map_err(|e| WindowError::EventLoop(e.to_string()))?;
     // Poll: a simulation engine re-renders continuously instead of waiting
@@ -150,6 +165,7 @@ where
         window: None,
         input: InputState::new(),
         pending_events: Vec::new(),
+        pending_raw: Vec::new(),
         error: None,
     };
     event_loop
@@ -169,13 +185,15 @@ struct EventLoopApp<F> {
     window: Option<WindowHandle>,
     input: InputState,
     pending_events: Vec<EngineEvent>,
+    /// Raw winit events for this frame, forwarded to the closure for `egui`.
+    pending_raw: Vec<RawWindowEvent>,
     /// Failure recorded mid-loop, returned by `run_event_loop` after exit.
     error: Option<WindowError>,
 }
 
 impl<F> ApplicationHandler for EventLoopApp<F>
 where
-    F: FnMut(&mut InputState, &[EngineEvent], &WindowHandle) -> FrameControl,
+    F: FnMut(&mut InputState, &[EngineEvent], &[RawWindowEvent], &WindowHandle) -> FrameControl,
 {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         // Also fired when a suspended app resumes; the window already exists then.
@@ -205,6 +223,7 @@ where
                     return;
                 };
                 let events = std::mem::take(&mut self.pending_events);
+                let raw = std::mem::take(&mut self.pending_raw);
                 for event in &events {
                     self.input.handle_event(event);
                 }
@@ -212,7 +231,7 @@ where
                     .iter()
                     .any(|e| matches!(e, EngineEvent::CloseRequested));
 
-                let control = (self.frame)(&mut self.input, &events, window);
+                let control = (self.frame)(&mut self.input, &events, &raw, window);
                 self.input.end_frame();
 
                 if close_requested || control == FrameControl::Exit {
@@ -225,6 +244,9 @@ where
                 if let Some(event) = EngineEvent::from_winit(&other) {
                     self.pending_events.push(event);
                 }
+                // Keep the raw event too: egui_winit consumes winit events
+                // directly and needs ones the normalizer drops (scroll, IME…).
+                self.pending_raw.push(other);
             }
         }
     }

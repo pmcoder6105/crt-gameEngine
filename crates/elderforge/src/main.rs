@@ -23,7 +23,12 @@ fn main() -> anyhow::Result<()> {
     let mut app = app::App::new(demo);
     let mut frame_count = 0u64;
     let mut fatal: Option<anyhow::Error> = None;
-    elderforge_platform::run_event_loop(WindowConfig::default(), |_input, events, window| {
+    elderforge_platform::run_event_loop(WindowConfig::default(), |_input, events, raw_events, window| {
+        // Feed raw window events to the editor's egui input first, so the UI
+        // sees clicks, scrolls, and keystrokes.
+        for event in raw_events {
+            app.integrate_event(window, event);
+        }
         for event in events {
             if let EngineEvent::Resized { width, height } = event {
                 app.resize(*width, *height);

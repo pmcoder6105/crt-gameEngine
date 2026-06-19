@@ -10,5 +10,6 @@ pub mod window;
 pub use event::{EngineEvent, Key, KeyCode, MouseButton};
 pub use input::InputState;
 pub use window::{
-    run_event_loop, FrameControl, SurfaceProvider, WindowConfig, WindowError, WindowHandle,
+    run_event_loop, FrameControl, RawWindowEvent, SurfaceProvider, WindowConfig, WindowError,
+    WindowHandle,
 };
