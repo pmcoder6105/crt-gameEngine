@@ -13,7 +13,7 @@ use elderforge_renderer::material::PbrMaterial;
 use elderforge_renderer::{primitives, ForwardPass, GpuMesh, RenderContext, ResourceCache};
 use elderforge_scene::Scene;
 
-use elderforge::demos::{Demo, DemoAssets};
+use elderforge::demos::{Demo, DemoAssets, CAPSULE_BASE_HALF_HEIGHT, CAPSULE_BASE_RADIUS};
 
 use crate::systems;
 
@@ -158,6 +158,10 @@ impl App {
         let cube = cache.insert_mesh(GpuMesh::upload(&context.device, "cube", &cube_v, &cube_i));
         let (sphere_v, sphere_i) = primitives::sphere(1.0, 24, 16);
         let sphere = cache.insert_mesh(GpuMesh::upload(&context.device, "sphere", &sphere_v, &sphere_i));
+        let (capsule_v, capsule_i) =
+            primitives::capsule(CAPSULE_BASE_RADIUS, CAPSULE_BASE_HALF_HEIGHT, 16, 8);
+        let capsule =
+            cache.insert_mesh(GpuMesh::upload(&context.device, "capsule", &capsule_v, &capsule_i));
         let (plane_v, plane_i) = primitives::plane(40.0);
         let plane =
             cache.insert_mesh(GpuMesh::upload(&context.device, "plane", &plane_v, &plane_i));
@@ -165,7 +169,7 @@ impl App {
 
         let forward = ForwardPass::new(&context.device, context.surface_format(), (width, height));
 
-        let assets = DemoAssets { cube, sphere, plane, material };
+        let assets = DemoAssets { cube, sphere, capsule, plane, material };
         self.demo.setup(&mut self.scene, &assets);
         log::info!("demo '{}': {} entities", self.demo.name(), self.scene.world.len());
 

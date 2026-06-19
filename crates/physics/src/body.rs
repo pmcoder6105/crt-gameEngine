@@ -30,6 +30,11 @@ pub enum Collider {
     Sphere { radius: f32 },
     /// Box with the given half-extents, oriented by the body's rotation.
     Box { half_extents: Vec3 },
+    /// Capsule aligned with the body's local Y axis: a segment of length
+    /// `2 * half_height` swept by `radius` (a hemispherical cap on each end),
+    /// oriented by the body's rotation. Mapped to the GJK `Capsule` core +
+    /// radius margin in narrowphase.
+    Capsule { radius: f32, half_height: f32 },
     /// Static half-space (e.g. a ground plane): the solid region lies on the
     /// `-normal` side of the plane `dot(normal, x) = offset`. `normal` is the
     /// unit outward normal (the direction bodies are pushed out of the solid).
@@ -51,6 +56,13 @@ impl Collider {
                 // Conservative: a rotated box fits within the sphere of its
                 // diagonal, so pad by the longest half-extent on every axis.
                 let r = Vec3::splat(half_extents.length());
+                Aabb::new(position - r, position + r)
+            }
+            Collider::Capsule { radius, half_height } => {
+                // Conservative and rotation-agnostic: the capsule fits inside the
+                // sphere of its half-length (`half_height + radius`), so pad every
+                // axis by that — a safe broadphase over-estimate at any orientation.
+                let r = Vec3::splat(half_height + radius);
                 Aabb::new(position - r, position + r)
             }
             Collider::HalfSpace { .. } => {
@@ -210,6 +222,25 @@ fn inv_inertia_for(collider: &Collider, mass: f32) -> Mat3 {
             );
             Mat3::from_diagonal(inv)
         }
+        Collider::Capsule { radius, half_height } if *radius > 0.0 => {
+            // Approximate the capsule as a solid cylinder (radius r, length
+            // 2·half_height) carrying the whole mass; the rounding caps are
+            // folded into the cylinder. Like the box tensor this is inert for
+            // the linear-only contact path (which applies no torque) and no
+            // current joint uses a capsule, so the cap contribution is never
+            // exercised — the approximation only needs to be finite, positive,
+            // and symmetric about the local Y axis.
+            let r = *radius;
+            let l = 2.0 * *half_height;
+            let axial = 0.5 * mass * r * r; // about local Y (the capsule axis)
+            let perp = mass * (r * r / 4.0 + l * l / 12.0); // about X and Z
+            let inv = Vec3::new(
+                if perp > 0.0 { 1.0 / perp } else { 0.0 },
+                if axial > 0.0 { 1.0 / axial } else { 0.0 },
+                if perp > 0.0 { 1.0 / perp } else { 0.0 },
+            );
+            Mat3::from_diagonal(inv)
+        }
         _ => Mat3::ZERO,
     }
 }
@@ -267,6 +298,27 @@ mod tests {
         assert!((body.inv_inertia_tensor.z_axis.z - expected_inv).abs() < 1e-5);
         // Off-diagonal terms stay zero for an axis-aligned cuboid.
         assert_eq!(body.inv_inertia_tensor.x_axis.y, 0.0);
+    }
+
+    #[test]
+    fn capsule_collider_aabb_covers_the_caps() {
+        // Conservative bounding sphere of radius half_height + radius = 1.5.
+        let aabb = Collider::Capsule { radius: 0.5, half_height: 1.0 }.aabb(Vec3::ZERO);
+        assert_eq!(aabb.min, Vec3::splat(-1.5));
+        assert_eq!(aabb.max, Vec3::splat(1.5));
+    }
+
+    #[test]
+    fn capsule_collider_inertia_is_axially_symmetric() {
+        let body =
+            RigidBody::dynamic(Vec3::ZERO, 2.0, Collider::Capsule { radius: 0.5, half_height: 1.0 });
+        let i = body.inv_inertia_tensor;
+        // Symmetric about the local Y axis: the two perpendicular inverse
+        // inertias match, and every diagonal term is finite and positive.
+        assert!((i.x_axis.x - i.z_axis.z).abs() < 1e-6);
+        assert!(i.x_axis.x > 0.0 && i.y_axis.y > 0.0 && i.z_axis.z > 0.0);
+        // Off-diagonal terms stay zero for an axis-aligned capsule.
+        assert_eq!(i.x_axis.y, 0.0);
     }
 
     #[test]

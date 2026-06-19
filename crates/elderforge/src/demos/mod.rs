@@ -9,7 +9,9 @@
 
 mod avalanche;
 mod pendulum;
+mod sandbox;
 mod stacking;
+mod stress;
 
 use elderforge_core::handles::{MaterialHandle, MeshHandle};
 use elderforge_core::math::{Mat4, Vec3};
@@ -26,11 +28,24 @@ pub struct DemoAssets {
     pub cube: MeshHandle,
     /// Unit-radius UV sphere; scale a body's `Transform` by its radius.
     pub sphere: MeshHandle,
+    /// Capsule of [`CAPSULE_BASE_RADIUS`] / [`CAPSULE_BASE_HALF_HEIGHT`], aligned
+    /// with local Y. Scale a body's `Transform` uniformly by `s`, paired with a
+    /// `Collider::Capsule` whose dimensions are the base values times `s`, so the
+    /// drawn capsule matches the collider exactly.
+    pub capsule: MeshHandle,
     /// Large flat ground/ramp quad in the XZ plane with a +Y normal.
     pub plane: MeshHandle,
     /// Default surface material for everything in the demos.
     pub material: MaterialHandle,
 }
+
+/// Radius the shared capsule mesh ([`DemoAssets::capsule`]) is built at. A
+/// capsule body rendered at uniform `Transform` scale `s` uses a
+/// `Collider::Capsule { radius: CAPSULE_BASE_RADIUS * s, .. }`; the same `s`
+/// scales the mesh, so collider and mesh stay in lockstep.
+pub const CAPSULE_BASE_RADIUS: f32 = 0.3;
+/// Half-height the shared capsule mesh is built at. See [`CAPSULE_BASE_RADIUS`].
+pub const CAPSULE_BASE_HALF_HEIGHT: f32 = 0.5;
 
 /// Which demo scene to build. Parsed from the `--demo <name>` argument.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,6 +56,10 @@ pub enum Demo {
     Pendulum,
     /// 200 spheres tumbling down a ramp and piling at the bottom.
     Avalanche,
+    /// A near-empty scene (ground + 5 cubes) for showing off the editor.
+    Sandbox,
+    /// 500 mixed shapes poured onto the ground — a solver/broadphase stress test.
+    Stress,
 }
 
 impl Demo {
@@ -50,6 +69,8 @@ impl Demo {
             "stacking" => Some(Demo::Stacking),
             "pendulum" => Some(Demo::Pendulum),
             "avalanche" => Some(Demo::Avalanche),
+            "sandbox" => Some(Demo::Sandbox),
+            "stress" => Some(Demo::Stress),
             _ => None,
         }
     }
@@ -60,12 +81,20 @@ impl Demo {
             Demo::Stacking => "stacking",
             Demo::Pendulum => "pendulum",
             Demo::Avalanche => "avalanche",
+            Demo::Sandbox => "sandbox",
+            Demo::Stress => "stress",
         }
     }
 
     /// Every demo, for help text and exhaustive testing.
-    pub fn all() -> [Demo; 3] {
-        [Demo::Stacking, Demo::Pendulum, Demo::Avalanche]
+    pub fn all() -> [Demo; 5] {
+        [
+            Demo::Stacking,
+            Demo::Pendulum,
+            Demo::Avalanche,
+            Demo::Sandbox,
+            Demo::Stress,
+        ]
     }
 
     /// Build this demo's scene: spawn the camera and all entities.
@@ -75,6 +104,8 @@ impl Demo {
             Demo::Stacking => stacking::setup(scene, assets),
             Demo::Pendulum => pendulum::setup(scene, assets),
             Demo::Avalanche => avalanche::setup(scene, assets),
+            Demo::Sandbox => sandbox::setup(scene, assets),
+            Demo::Stress => stress::setup(scene, assets),
         }
     }
 }

@@ -7,7 +7,7 @@
 //!
 //! Skips (with a note) when no GPU adapter is available, e.g. headless CI.
 
-use elderforge::demos::{Demo, DemoAssets};
+use elderforge::demos::{Demo, DemoAssets, CAPSULE_BASE_HALF_HEIGHT, CAPSULE_BASE_RADIUS};
 use elderforge_core::math::Mat4;
 use elderforge_ecs::components::{Camera, MeshRenderer, PhysicsBody, Transform};
 use elderforge_renderer::{primitives, Draw, ForwardPass, GpuMesh, ResourceCache};
@@ -39,10 +39,12 @@ fn every_demo_builds_steps_and_renders() {
     let cube = cache.insert_mesh(GpuMesh::upload(&device, "cube", &cv, &ci));
     let (sv, si) = primitives::sphere(1.0, 24, 16);
     let sphere = cache.insert_mesh(GpuMesh::upload(&device, "sphere", &sv, &si));
+    let (cap_v, cap_i) = primitives::capsule(CAPSULE_BASE_RADIUS, CAPSULE_BASE_HALF_HEIGHT, 16, 8);
+    let capsule = cache.insert_mesh(GpuMesh::upload(&device, "capsule", &cap_v, &cap_i));
     let (pv, pi) = primitives::plane(40.0);
     let plane = cache.insert_mesh(GpuMesh::upload(&device, "plane", &pv, &pi));
     let material = cache.insert_material(Default::default());
-    let assets = DemoAssets { cube, sphere, plane, material };
+    let assets = DemoAssets { cube, sphere, capsule, plane, material };
 
     let mut forward = ForwardPass::new(&device, FORMAT, (W, H));
 

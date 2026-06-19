@@ -94,6 +94,75 @@ pub fn sphere(radius: f32, sectors: u32, stacks: u32) -> (Vec<Vertex>, Vec<u32>)
     (vertices, indices)
 }
 
+/// A capsule aligned with the Y axis: a cylinder of the given `radius` and
+/// height `2 * half_height`, capped by a hemisphere of `radius` at each end,
+/// centered at the origin (so it spans `y ∈ [-(half_height + radius),
+/// half_height + radius]`). `sectors` divides longitude; `cap_stacks` divides
+/// each hemispherical cap's latitude.
+///
+/// Normals are the unit radial from the nearest cap center, which is purely
+/// horizontal at the equator — exactly the cylinder-wall normal — so shading
+/// stays continuous across the cap/cylinder seam. Degenerate triangles that
+/// collapse onto a pole vertex are skipped, as in [`sphere`].
+pub fn capsule(radius: f32, half_height: f32, sectors: u32, cap_stacks: u32) -> (Vec<Vertex>, Vec<u32>) {
+    use std::f32::consts::PI;
+    let sectors = sectors.max(3);
+    let cap_stacks = cap_stacks.max(1);
+    let row = sectors + 1;
+
+    // Latitude rings, north pole to south pole. The top hemisphere's cap center
+    // is at +half_height and the bottom's at -half_height; the two equator rings
+    // (phi = 0) sit at y = ±half_height and bound the cylinder wall between them.
+    let mut ring_specs = Vec::with_capacity(2 * (cap_stacks as usize + 1));
+    for i in 0..=cap_stacks {
+        // Top hemisphere: phi from +PI/2 (pole) down to 0 (equator).
+        ring_specs.push((half_height, PI / 2.0 * (1.0 - i as f32 / cap_stacks as f32)));
+    }
+    for i in 0..=cap_stacks {
+        // Bottom hemisphere: phi from 0 (equator) down to -PI/2 (pole).
+        ring_specs.push((-half_height, -PI / 2.0 * (i as f32 / cap_stacks as f32)));
+    }
+
+    let total_height = 2.0 * (half_height + radius);
+    let mut vertices = Vec::with_capacity(ring_specs.len() * row as usize);
+    for &(center_y, phi) in &ring_specs {
+        let (sphi, cphi) = phi.sin_cos();
+        let ring_r = radius * cphi;
+        let y = center_y + radius * sphi;
+        let v = if total_height > 0.0 {
+            (half_height + radius - y) / total_height
+        } else {
+            0.0
+        };
+        for j in 0..=sectors {
+            let theta = 2.0 * PI * (j as f32 / sectors as f32);
+            let (sth, cth) = theta.sin_cos();
+            let position = [ring_r * cth, y, ring_r * sth];
+            // Unit radial (cos²φ + sin²φ = 1, so no normalization needed).
+            let normal = [cphi * cth, sphi, cphi * sth];
+            let uv = [j as f32 / sectors as f32, v];
+            vertices.push(vertex(position, normal, uv));
+        }
+    }
+
+    let rings = ring_specs.len() as u32;
+    let mut indices = Vec::new();
+    for i in 0..rings - 1 {
+        for j in 0..sectors {
+            let a = i * row + j;
+            let b = a + row;
+            // Skip the triangle that collapses onto a pole vertex.
+            if i != 0 {
+                indices.extend_from_slice(&[a, b, a + 1]);
+            }
+            if i != rings - 2 {
+                indices.extend_from_slice(&[a + 1, b, b + 1]);
+            }
+        }
+    }
+    (vertices, indices)
+}
+
 /// A flat ground quad in the XZ plane at `y = 0`, spanning `[-half_size,
 /// half_size]` on both axes, with an upward (+Y) normal.
 pub fn plane(half_size: f32) -> (Vec<Vertex>, Vec<u32>) {
@@ -147,6 +216,32 @@ mod tests {
                 (v.normal[0].powi(2) + v.normal[1].powi(2) + v.normal[2].powi(2)).sqrt();
             assert!((nlen - 1.0).abs() < 1e-4, "non-unit normal: {nlen}");
         }
+    }
+
+    #[test]
+    fn capsule_is_well_formed() {
+        let (sectors, cap_stacks) = (16u32, 6u32);
+        let (radius, half_height) = (0.5f32, 1.0f32);
+        let (vertices, indices) = capsule(radius, half_height, sectors, cap_stacks);
+        // Two hemispheres of (cap_stacks + 1) rings, each row sectors + 1 wide.
+        let rings = 2 * (cap_stacks + 1);
+        assert_eq!(vertices.len(), (rings * (sectors + 1)) as usize);
+        assert_eq!(indices.len() % 3, 0);
+        assert!(indices.iter().all(|&i| (i as usize) < vertices.len()));
+        // Every vertex lies inside the capsule's bounding box with a unit normal.
+        for v in &vertices {
+            assert!(v.position[0].abs() <= radius + 1e-4);
+            assert!(v.position[2].abs() <= radius + 1e-4);
+            assert!(v.position[1].abs() <= half_height + radius + 1e-4);
+            let nlen = (v.normal[0].powi(2) + v.normal[1].powi(2) + v.normal[2].powi(2)).sqrt();
+            assert!((nlen - 1.0).abs() < 1e-4, "non-unit normal: {nlen}");
+        }
+        // The widest ring sits at exactly the cylinder radius.
+        let max_xz = vertices
+            .iter()
+            .map(|v| (v.position[0].powi(2) + v.position[2].powi(2)).sqrt())
+            .fold(0.0_f32, f32::max);
+        assert!((max_xz - radius).abs() < 1e-4, "widest ring {max_xz} != radius {radius}");
     }
 
     #[test]

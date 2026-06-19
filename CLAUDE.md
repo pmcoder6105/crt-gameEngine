@@ -440,6 +440,36 @@ cargo test               # run all unit + integration tests
   frame so egui can share it); the old `systems::editor` stub is gone. Verified
   on Metal: `--smoke-test` opens the window, paints 30 editor+3D frames, exits
   clean; `window_smoke`/`scene_render`/`demos_render` all green.
+- Completed: two new demos + a capsule body collider + a launch-resolution
+  flag (phase 11). The world's fast-path `body::Collider` gained a `Capsule
+  { radius, half_height }` variant (Y-aligned), wired through `aabb`
+  (conservative bounding-sphere, rotation-safe), `inv_inertia_for` (solid-
+  cylinder approximation — inert for the linear-only contact path and unused
+  by any current joint, so only its symmetry/positivity matter), and
+  `world::as_convex` -> `AnyShape::Capsule` so it collides via the existing
+  GJK/EPA path (the narrowphase `Capsule` core already existed). Renderer
+  gained `primitives::capsule(radius, half_height, sectors, cap_stacks)` — a
+  cylinder + two hemisphere caps whose equator normals are horizontal (so the
+  cap/wall seam shades continuously); `DemoAssets` carries the new mesh,
+  baked at `CAPSULE_BASE_{RADIUS,HALF_HEIGHT}` (0.3 / 0.5) so a capsule body
+  rendered at uniform scale `s` pairs with `Collider::Capsule { radius: base*s,
+  .. }` and mesh+collider stay in lockstep. New demos (now 5 total, all via
+  `cargo run --release -- --demo <name>`): **sandbox** — ground + 5 cubes a
+  short drop above rest, an editor showcase (small legible hierarchy, live
+  Inspector transform edits, obvious Play/Pause/Step); **stress** — 500 mixed
+  spheres/boxes/capsules poured into a walled square pit, substeps lowered to
+  8 for throughput, the Stats panel the headline (frame/physics time climb as
+  the cloud lands, ease off as islands sleep); boxes/capsules get a fixed
+  random orientation with zero angular velocity (contacts are linear-only, so
+  initial spin would never decay). The editor is already always-on for every
+  demo, so the three existing demos already run with it visible — unchanged.
+  Binary gained `--resolution <W>x<H>` (default 1920x1080, case-insensitive
+  `x`, errors on malformed/zero) feeding `WindowConfig`. Unit tests: capsule
+  collider aabb + axially-symmetric inertia (physics, now 64 lib tests),
+  `capsule_is_well_formed` (renderer); `demos_render` updated to build the
+  capsule asset and now exercises all 5 demos (sandbox 66% / stress 66% lit).
+  Full workspace green; both new demos verified clean under
+  `--demo <name> --smoke-test` (7 / 502 entities).
 - Next: angular contact response (contacts are still linear-only — fine for
   centered/axis-aligned cases, but a box can't yet tip over a contact edge or
   pick up spin from an off-center hit), persistent BVH refit inside the world
@@ -565,3 +595,32 @@ each frame; pause skips the step loop entirely (render still runs), and the
 multiplier scales the `FixedTimestep` input. Inspector Transform edits are
 mirrored back into the entity's rigid body (and wake it) so they're not
 immediately overwritten by the solver.
+
+2026-06-19 — `body::Collider` grew a `Capsule { radius, half_height }` variant
+(Y-aligned) so the world can simulate capsules, not just sphere/box/half-space.
+It maps straight to the pre-existing narrowphase `Capsule` core via
+`world::as_convex` → `AnyShape::Capsule`, so capsules collide through the same
+GJK/EPA path as boxes (no new contact code). Its `inv_inertia_for` arm is a
+documented solid-cylinder *approximation* (caps folded in), deliberately not
+exact: like the box tensor it is inert for the linear-only contact path (no
+torque) and no current joint uses a capsule, so only finiteness/positivity/
+axial symmetry matter. The AABB is the conservative bounding sphere
+(`half_height + radius`), rotation-safe like the box's diagonal trick.
+
+2026-06-19 — Demo capsule rendering relies on UNIFORM scale to keep mesh and
+collider identical. The shared capsule mesh is baked once at
+`CAPSULE_BASE_{RADIUS,HALF_HEIGHT}` (0.3 / 0.5); a capsule body is spawned with
+`Transform` scale `splat(s)` and `Collider::Capsule { radius: base*s,
+half_height: base*s }`, so the single scalar `s` scales the drawn mesh and the
+collider in lockstep (uniform scaling preserves the spherical caps; non-uniform
+would not). Boxes follow the existing convention (cube mesh half-extent 0.5,
+scale `splat(half/0.5)`); spheres scale by radius. This is why the stress demo
+uses one base capsule mesh for all 500 bodies rather than per-body meshes.
+
+2026-06-19 — The elderforge binary defaults its launch window to 1920×1080
+(via `--resolution <W>x<H>`), NOT `WindowConfig::default()` (which stays the
+platform-general 1600×900). The binary parses the flag and overrides
+`WindowConfig.{width,height}`; the platform default is left alone so the
+windowing layer keeps a sensible standalone default. Demo selection
+(`--demo`) and resolution (`--resolution`) are independent flags parsed the
+same hand-rolled way (no clap dependency).

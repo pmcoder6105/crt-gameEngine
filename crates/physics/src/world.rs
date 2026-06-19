@@ -5,7 +5,7 @@ use elderforge_core::math::{Quat, Vec3};
 use crate::body::{BodyHandle, BodyKind, Collider, RigidBody};
 use crate::broadphase::Bvh;
 use crate::narrowphase::{collide, surface_support, AnyShape, ContactManifold, Pose};
-use crate::shapes::{BoxShape, Sphere};
+use crate::shapes::{BoxShape, Capsule, Sphere};
 use crate::solver::{
     BallJoint, Constraint, ContactConstraint, DistanceConstraint, FixedJoint, HingeJoint, Joint,
     PrismaticJoint,
@@ -544,6 +544,9 @@ fn as_convex(collider: Collider) -> Option<AnyShape> {
     match collider {
         Collider::Sphere { radius } => Some(AnyShape::Sphere(Sphere { radius })),
         Collider::Box { half_extents } => Some(AnyShape::Cuboid(BoxShape { half_extents })),
+        Collider::Capsule { radius, half_height } => {
+            Some(AnyShape::Capsule(Capsule { radius, half_height }))
+        }
         Collider::HalfSpace { .. } => None,
     }
 }
