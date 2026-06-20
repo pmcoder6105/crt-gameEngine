@@ -8,8 +8,11 @@
 //! needs and how to place them.
 
 mod avalanche;
+mod cloth_drape;
+mod cloth_flag;
 mod pendulum;
 mod sandbox;
+mod soft_ball;
 mod stacking;
 mod stress;
 
@@ -60,6 +63,12 @@ pub enum Demo {
     Sandbox,
     /// 500 mixed shapes poured onto the ground — a solver/broadphase stress test.
     Stress,
+    /// A tetrahedral soft body dropped onto a table — volume-preserving squash.
+    SoftBall,
+    /// A cloth banner pinned at two corners, billowing in the wind.
+    ClothFlag,
+    /// A cloth sheet draped over a spinning cube — soft/rigid contact coupling.
+    ClothDrape,
 }
 
 impl Demo {
@@ -71,6 +80,9 @@ impl Demo {
             "avalanche" => Some(Demo::Avalanche),
             "sandbox" => Some(Demo::Sandbox),
             "stress" => Some(Demo::Stress),
+            "soft_ball" | "softball" => Some(Demo::SoftBall),
+            "cloth_flag" | "clothflag" => Some(Demo::ClothFlag),
+            "cloth_drape" | "clothdrape" => Some(Demo::ClothDrape),
             _ => None,
         }
     }
@@ -83,17 +95,23 @@ impl Demo {
             Demo::Avalanche => "avalanche",
             Demo::Sandbox => "sandbox",
             Demo::Stress => "stress",
+            Demo::SoftBall => "soft_ball",
+            Demo::ClothFlag => "cloth_flag",
+            Demo::ClothDrape => "cloth_drape",
         }
     }
 
     /// Every demo, for help text and exhaustive testing.
-    pub fn all() -> [Demo; 5] {
+    pub fn all() -> [Demo; 8] {
         [
             Demo::Stacking,
             Demo::Pendulum,
             Demo::Avalanche,
             Demo::Sandbox,
             Demo::Stress,
+            Demo::SoftBall,
+            Demo::ClothFlag,
+            Demo::ClothDrape,
         ]
     }
 
@@ -106,6 +124,9 @@ impl Demo {
             Demo::Avalanche => avalanche::setup(scene, assets),
             Demo::Sandbox => sandbox::setup(scene, assets),
             Demo::Stress => stress::setup(scene, assets),
+            Demo::SoftBall => soft_ball::setup(scene, assets),
+            Demo::ClothFlag => cloth_flag::setup(scene, assets),
+            Demo::ClothDrape => cloth_drape::setup(scene, assets),
         }
     }
 }

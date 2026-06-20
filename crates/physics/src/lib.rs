@@ -9,13 +9,20 @@ pub mod material;
 pub mod narrowphase;
 pub mod query;
 pub mod shapes;
+pub mod soft;
 pub mod solver;
 pub mod world;
 
-pub use body::{BodyHandle, BodyKind, Collider, RigidBody, SoftBody};
+pub use body::{BodyHandle, BodyKind, Collider, RigidBody};
 pub use material::{CombinedMaterial, PhysicsMaterial};
 pub use shapes::ColliderShape;
-pub use solver::{BallJoint, FixedJoint, HingeJoint, Joint, PrismaticJoint};
+pub use soft::{
+    Cloth, ClothDef, ClothHandle, Particle, SoftBody, SoftBodyDef, SoftBodyHandle,
+};
+pub use solver::{
+    BallJoint, FixedJoint, HingeJoint, Joint, ParticleBodyContact, ParticleDistance,
+    ParticleVolume, PrismaticJoint,
+};
 pub use world::PhysicsWorld;
 
 use thiserror::Error;

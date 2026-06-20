@@ -37,8 +37,14 @@ fn vs_main(in: VsIn) -> VsOut {
 }
 
 @fragment
-fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    let n = normalize(in.world_normal);
+fn fs_main(in: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
+    // Two-sided shading: culling is off engine-wide, so thin surfaces (cloth)
+    // rasterize both faces. Flip the normal toward the viewer on back faces so a
+    // flag is lit and tinted on whichever side is showing, not black on one.
+    var n = normalize(in.world_normal);
+    if (!front_facing) {
+        n = -n;
+    }
     let light = normalize(vec3<f32>(0.3, 0.9, 0.35));
     let diffuse = clamp(dot(n, light), 0.0, 1.0);
     let shade = 0.35 + 0.65 * diffuse;

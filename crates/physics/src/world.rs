@@ -3,12 +3,13 @@
 use elderforge_core::math::{Quat, Vec3};
 
 use crate::body::{BodyHandle, BodyKind, Collider, RigidBody};
-use crate::broadphase::Bvh;
+use crate::broadphase::{Aabb, Bvh};
 use crate::narrowphase::{collide, surface_support, AnyShape, ContactManifold, Pose};
 use crate::shapes::{BoxShape, Capsule, Sphere};
+use crate::soft::{Cloth, ClothDef, ClothHandle, Particle, SoftBody, SoftBodyDef, SoftBodyHandle};
 use crate::solver::{
     BallJoint, Constraint, ContactConstraint, DistanceConstraint, FixedJoint, HingeJoint, Joint,
-    PrismaticJoint,
+    ParticleBodyContact, ParticleDistance, ParticleVolume, PrismaticJoint,
 };
 use crate::PhysicsError;
 
@@ -25,11 +26,28 @@ pub const DEFAULT_ANGULAR_SLEEP_THRESHOLD: f32 = 0.05;
 /// Default number of consecutive quiet frames before an island sleeps.
 pub const DEFAULT_SLEEP_FRAMES: u32 = 30;
 
+/// Default per-second velocity damping applied to soft-body / cloth particles so
+/// they settle instead of ringing forever. Light enough to leave a flag waving.
+pub const DEFAULT_PARTICLE_DAMPING: f32 = 0.5;
+
 pub struct PhysicsWorld {
     bodies: Vec<RigidBody>,
     generations: Vec<u32>,
     distance_constraints: Vec<DistanceConstraint>,
     joints: Vec<Joint>,
+    /// Flat array of every soft-body and cloth particle. Soft bodies and cloths
+    /// own contiguous runs of it (see [`SoftBody::base`]/[`Cloth::base`]).
+    particles: Vec<Particle>,
+    /// Distance constraints over [`particles`](Self::particles): soft-body tet
+    /// edges and cloth structural/shear/bending springs.
+    particle_distance: Vec<ParticleDistance>,
+    /// Tetrahedral volume-preservation constraints over the particles.
+    particle_volume: Vec<ParticleVolume>,
+    /// Soft bodies resident in the world (metadata; their DOFs live in
+    /// `particles`).
+    soft_bodies: Vec<SoftBody>,
+    /// Cloths resident in the world.
+    cloths: Vec<Cloth>,
     pub gravity: Vec3,
     /// Substeps per frame (configurable). See [`DEFAULT_SUBSTEPS`].
     pub substeps: u32,
@@ -44,6 +62,12 @@ pub struct PhysicsWorld {
     pub angular_sleep_threshold: f32,
     /// Consecutive quiet frames an island must accrue before it sleeps.
     pub sleep_frames: u32,
+    /// Per-second velocity damping for particles. See [`DEFAULT_PARTICLE_DAMPING`].
+    pub particle_damping: f32,
+    /// Steady wind acceleration applied to soft-body / cloth particles (on top
+    /// of gravity), in m/s². A crude uniform aerodynamic push — enough to make a
+    /// flag billow. Zero by default; rigid bodies ignore it.
+    pub wind: Vec3,
     /// Narrowphase candidate pairs actually tested during the last [`step`].
     /// A fully asleep world drives this to zero — the sleeping system's payoff.
     last_narrowphase_tests: usize,
@@ -56,6 +80,11 @@ impl PhysicsWorld {
             generations: Vec::new(),
             distance_constraints: Vec::new(),
             joints: Vec::new(),
+            particles: Vec::new(),
+            particle_distance: Vec::new(),
+            particle_volume: Vec::new(),
+            soft_bodies: Vec::new(),
+            cloths: Vec::new(),
             gravity: Vec3::new(0.0, -9.81, 0.0),
             substeps: DEFAULT_SUBSTEPS,
             iterations: DEFAULT_ITERATIONS,
@@ -63,6 +92,8 @@ impl PhysicsWorld {
             linear_sleep_threshold: DEFAULT_LINEAR_SLEEP_THRESHOLD,
             angular_sleep_threshold: DEFAULT_ANGULAR_SLEEP_THRESHOLD,
             sleep_frames: DEFAULT_SLEEP_FRAMES,
+            particle_damping: DEFAULT_PARTICLE_DAMPING,
+            wind: Vec3::ZERO,
             last_narrowphase_tests: 0,
         }
     }
@@ -264,6 +295,115 @@ impl PhysicsWorld {
         }
     }
 
+    /// Add a soft body from a [`SoftBodyDef`]: its particles are appended to the
+    /// world's particle array, and its edge (distance) and tet (volume)
+    /// constraints are stored with indices offset into that array. Returns a
+    /// handle to the resident [`SoftBody`] (its surface mesh, for rendering).
+    pub fn add_soft_body(&mut self, def: &SoftBodyDef) -> SoftBodyHandle {
+        let base = self.particles.len();
+        for (i, &pos) in def.particles.iter().enumerate() {
+            self.particles
+                .push(Particle::new(pos, def.inv_masses[i], def.particle_radius));
+        }
+        for &(a, b, rest) in &def.edges {
+            self.particle_distance.push(ParticleDistance::new(
+                base + a as usize,
+                base + b as usize,
+                rest,
+                def.distance_compliance,
+            ));
+        }
+        for &(idx, rest_volume) in &def.tets {
+            self.particle_volume.push(ParticleVolume::new(
+                [
+                    base + idx[0] as usize,
+                    base + idx[1] as usize,
+                    base + idx[2] as usize,
+                    base + idx[3] as usize,
+                ],
+                rest_volume,
+                def.volume_compliance,
+            ));
+        }
+        let handle = SoftBodyHandle(self.soft_bodies.len());
+        self.soft_bodies.push(SoftBody {
+            base,
+            count: def.particles.len(),
+            surface: def.surface.clone(),
+        });
+        handle
+    }
+
+    /// Add a cloth from a [`ClothDef`]: its grid of particles is appended and
+    /// the structural / shear / bending distance constraints stored (each family
+    /// with its own compliance). Returns a handle to the resident [`Cloth`].
+    pub fn add_cloth(&mut self, def: &ClothDef) -> ClothHandle {
+        let base = self.particles.len();
+        for (i, &pos) in def.particles.iter().enumerate() {
+            self.particles
+                .push(Particle::new(pos, def.inv_masses[i], def.particle_radius));
+        }
+        let mut push_group = |group: &[(u32, u32, f32)], compliance: f32| {
+            for &(a, b, rest) in group {
+                self.particle_distance.push(ParticleDistance::new(
+                    base + a as usize,
+                    base + b as usize,
+                    rest,
+                    compliance,
+                ));
+            }
+        };
+        push_group(&def.structural, def.structural_compliance);
+        push_group(&def.shear, def.shear_compliance);
+        push_group(&def.bending, def.bending_compliance);
+        let handle = ClothHandle(self.cloths.len());
+        self.cloths.push(Cloth { base, cols: def.cols, rows: def.rows });
+        handle
+    }
+
+    /// All particles, in world order. Soft bodies and cloths index contiguous
+    /// runs of this via their `base`/`count`.
+    pub fn particles(&self) -> &[Particle] {
+        &self.particles
+    }
+
+    /// Total particle count across all soft bodies and cloths.
+    pub fn particle_count(&self) -> usize {
+        self.particles.len()
+    }
+
+    /// Resident soft bodies (metadata + surface topology).
+    pub fn soft_bodies(&self) -> &[SoftBody] {
+        &self.soft_bodies
+    }
+
+    /// Resident cloths.
+    pub fn cloths(&self) -> &[Cloth] {
+        &self.cloths
+    }
+
+    /// A soft body by handle, or `None` for a stale handle.
+    pub fn soft_body(&self, handle: SoftBodyHandle) -> Option<&SoftBody> {
+        self.soft_bodies.get(handle.0)
+    }
+
+    /// A cloth by handle, or `None` for a stale handle.
+    pub fn cloth(&self, handle: ClothHandle) -> Option<&Cloth> {
+        self.cloths.get(handle.0)
+    }
+
+    /// The particle slice owned by a soft body, or `None` for a stale handle.
+    pub fn soft_body_particles(&self, handle: SoftBodyHandle) -> Option<&[Particle]> {
+        let sb = self.soft_bodies.get(handle.0)?;
+        Some(&self.particles[sb.base..sb.base + sb.count])
+    }
+
+    /// The particle slice owned by a cloth, or `None` for a stale handle.
+    pub fn cloth_particles(&self, handle: ClothHandle) -> Option<&[Particle]> {
+        let c = self.cloths.get(handle.0)?;
+        Some(&self.particles[c.base..c.base + c.particle_count()])
+    }
+
     /// Advance the simulation by `frame_dt` seconds via the XPBD substep loop.
     pub fn step(&mut self, frame_dt: f32) {
         let substeps = self.substeps.max(1);
@@ -283,6 +423,7 @@ impl PhysicsWorld {
     /// pairs (for sleeping-island grouping).
     fn substep(&mut self, dt: f32) -> Vec<(usize, usize)> {
         let gravity = self.gravity;
+        let particle_accel = self.gravity + self.wind;
 
         // 1. Predict positions (and integrate free rotation).
         for body in &mut self.bodies {
@@ -299,6 +440,16 @@ impl PhysicsWorld {
             }
         }
 
+        // 1b. Predict particle positions (soft bodies + cloth). Pinned
+        //     particles (zero inverse mass) stay put.
+        for p in &mut self.particles {
+            p.prev_position = p.position;
+            if p.inv_mass == 0.0 {
+                continue;
+            }
+            p.position += p.velocity * dt + particle_accel * (dt * dt);
+        }
+
         // 2. Broadphase + narrowphase -> contact constraints (at predicted state).
         let GenContacts { mut contacts, island_pairs, wake, tests } = self.generate_contacts();
         self.last_narrowphase_tests += tests;
@@ -307,6 +458,10 @@ impl PhysicsWorld {
             self.bodies[i].sleeping = false;
             self.bodies[i].low_energy_frames = 0;
         }
+
+        // 2b. Particle ↔ rigid contacts at the predicted state (none when the
+        //     scene has no particles).
+        let mut particle_contacts = self.generate_particle_contacts();
 
         // 3. Project all constraints for several iterations.
         for c in &mut self.distance_constraints {
@@ -318,6 +473,15 @@ impl PhysicsWorld {
         for c in &mut contacts {
             c.reset();
         }
+        for c in &mut self.particle_distance {
+            c.reset();
+        }
+        for c in &mut self.particle_volume {
+            c.reset();
+        }
+        for c in &mut particle_contacts {
+            c.reset();
+        }
         for _ in 0..self.iterations.max(1) {
             for c in &mut self.distance_constraints {
                 c.project(&mut self.bodies, dt);
@@ -327,6 +491,16 @@ impl PhysicsWorld {
             }
             for c in &mut contacts {
                 c.project(&mut self.bodies, dt);
+            }
+            // Soft-body / cloth internal constraints, then their rigid contacts.
+            for c in &mut self.particle_distance {
+                c.project(&mut self.particles, dt);
+            }
+            for c in &mut self.particle_volume {
+                c.project(&mut self.particles, dt);
+            }
+            for c in &mut particle_contacts {
+                c.project(&mut self.particles, &mut self.bodies, dt);
             }
         }
 
@@ -342,6 +516,17 @@ impl PhysicsWorld {
             body.angular_velocity = Vec3::new(dq.x, dq.y, dq.z) * (2.0 / dt);
         }
 
+        // 4b. Derive particle velocities from the position change, then apply
+        //     viscous damping so cloth/soft bodies settle.
+        let damp = (1.0 - self.particle_damping * dt).clamp(0.0, 1.0);
+        for p in &mut self.particles {
+            if p.inv_mass == 0.0 {
+                p.velocity = Vec3::ZERO;
+                continue;
+            }
+            p.velocity = (p.position - p.prev_position) / dt * damp;
+        }
+
         // 5. Velocity-level restitution and dynamic friction.
         for c in &contacts {
             c.apply_restitution(&mut self.bodies);
@@ -349,6 +534,37 @@ impl PhysicsWorld {
         }
 
         island_pairs
+    }
+
+    /// Particle ↔ rigid contacts for this substep. Each particle is tested
+    /// against every (live) rigid body it overlaps; the rigid count is small in
+    /// soft scenes, so this is a straightforward O(particles × bodies) sweep
+    /// with an AABB reject rather than a dedicated broadphase.
+    fn generate_particle_contacts(&self) -> Vec<ParticleBodyContact> {
+        let mut out = Vec::new();
+        if self.particles.is_empty() || self.bodies.is_empty() {
+            return out;
+        }
+        for (pi, p) in self.particles.iter().enumerate() {
+            let pbox = Aabb::new(
+                p.position - Vec3::splat(p.radius),
+                p.position + Vec3::splat(p.radius),
+            );
+            for (bi, b) in self.bodies.iter().enumerate() {
+                if b.removed {
+                    continue;
+                }
+                // Half-spaces report an infinite AABB, so they always pass the
+                // reject and fall through to the exact test.
+                if !b.collider.aabb(b.position).overlaps(&pbox) {
+                    continue;
+                }
+                if let Some(c) = ParticleBodyContact::generate(pi, p, bi, b) {
+                    out.push(c);
+                }
+            }
+        }
+        out
     }
 
     /// Build contact constraints for this substep. Finite-AABB bodies go through

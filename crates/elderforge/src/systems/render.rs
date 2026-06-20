@@ -5,13 +5,18 @@ use elderforge_ecs::components::{Camera, MeshRenderer, Transform};
 use elderforge_renderer::{Draw, ForwardPass, FrameContext, RenderContext, ResourceCache};
 use elderforge_scene::Scene;
 
+use elderforge::deformable::DeformableMeshes;
+
 /// Record the 3D forward pass for `scene` into `frame`. The caller owns the
 /// frame lifecycle (acquire / present) so it can also record the editor's egui
-/// pass into the same encoder before presenting.
+/// pass into the same encoder before presenting. `deformables` carries the
+/// per-frame soft-body / cloth meshes, drawn in world space alongside the static
+/// `MeshRenderer` entities.
 pub fn record(
     scene: &Scene,
     context: &RenderContext,
     cache: &ResourceCache,
+    deformables: &DeformableMeshes,
     forward: &mut ForwardPass,
     frame: &mut FrameContext,
 ) {
@@ -28,6 +33,8 @@ pub fn record(
             draws.push(Draw { model: transform.matrix(), mesh });
         }
     }
+    // Then the deforming soft-body / cloth surfaces (already in world space).
+    deformables.append_draws(&mut draws);
 
     forward.render(
         &context.device,

@@ -73,11 +73,13 @@ Debug viz:   Collision shapes, constraint anchors, velocity vectors,
 physics/src/
   lib.rs
   world.rs          PhysicsWorld — owns all bodies and the solver
-  body.rs           RigidBody, SoftBody, BodyHandle
+  body.rs           RigidBody, BodyHandle
+  soft.rs           Particle, SoftBody, Cloth + tet-lattice / grid builders
   solver/
     mod.rs
     xpbd.rs         XPBD constraint solver (main integration loop)
     constraints.rs  Distance, contact, joint constraint types
+    soft.rs         Particle distance/volume + particle↔rigid contacts
   broadphase/
     mod.rs
     bvh.rs          BVH tree with incremental AABB updates
@@ -503,6 +505,37 @@ cargo test               # run all unit + integration tests
   name/world/bodies/assets + per-component counts + handle resolution); and a
   GPU `scene_io` test (realize → save → load → re-realize, all handles resolve).
   Full workspace green (133 tests).
+- Completed: soft bodies + cloth, both XPBD-native (phase 13). New `physics/
+  src/soft.rs` adds `Particle` (position/prev/velocity/inv_mass + a collision
+  radius — the shared DOF for both), `SoftBodyDef` (a tet-lattice builder:
+  `box_lattice`/`ball` clip a regular grid and split each cell into six tets via
+  **Kuhn's decomposition** so shared faces always match, dedupe edges, and
+  extract the outward boundary surface for rendering), and `ClothDef::grid`
+  (structural/shear/bending distance constraints over a 2D grid, two top corners
+  pinnable). `physics/src/solver/soft.rs` adds the XPBD particle constraints —
+  `ParticleDistance` (cloth springs + soft-body edges), `ParticleVolume`
+  (per-tet volume preservation, the anti-collapse constraint), and
+  `ParticleBodyContact` (particle vs sphere/box/capsule/half-space, two-way
+  **linear-only** coupling + Coulomb friction, matching the rigid contact
+  convention). `PhysicsWorld` gained a flat `particles` array (soft bodies /
+  cloths own contiguous runs via `base`/`count`), `add_soft_body`/`add_cloth`,
+  particle integration interleaved into the substep loop (predict → particle
+  contacts → project distance/volume/contacts → derive velocity + viscous
+  `particle_damping`), and a `wind` acceleration field (a flat flag at its
+  natural width hangs taut, so wind is what makes it billow). Renderer:
+  `GpuMesh::upload_dynamic`/`update_vertices` (COPY_DST vertex buffer streamed
+  each frame) and a two-sided `forward.wgsl` (flips the normal on back faces so
+  cloth is lit from both sides). Elderforge: `deformable.rs` (`DeformableMeshes`
+  builds/updates one dynamic mesh per soft body + cloth from particle positions,
+  recomputing smoothed normals, drawn in world space alongside the ECS meshes),
+  wired through `App`/`systems::render::record`. Three demos (`--demo
+  soft_ball | cloth_flag | cloth_drape`): a soft ball squashing on a table, a
+  flag billowing in wind from two pinned corners, and a cloth draping over a
+  spinning cube (friction drags the fabric around). Tests: physics `tests/soft.rs`
+  (flag billows + doesn't stretch, ball preserves volume on impact, soft body
+  shoves a dynamic body) plus soft/cloth unit tests; `demos_render` now exercises
+  all 8 demos with deformables and asserts particle finiteness; all three new
+  demos verified clean under `--smoke-test`. Full workspace green (151 tests).
 - Next: angular contact response (contacts are still linear-only — fine for
   centered/axis-aligned cases, but a box can't yet tip over a contact edge or
   pick up spin from an off-center hit), persistent BVH refit inside the world
@@ -697,3 +730,54 @@ editor hands the request up. On a successful load the app swaps the scene,
 rebuilds the cache from its asset table, clears the (now-dangling) selection,
 and reseeds the substep slider; failures are reported in the toolbar status
 line and leave the running scene untouched.
+
+2026-06-20 — Soft bodies and cloth share one flat `PhysicsWorld::particles`
+array, NOT a per-body `Vec<Particle>`. A `Particle` (position/prev/velocity/
+inv_mass + a collision radius) is the single DOF type; a `SoftBody`/`Cloth` is
+just metadata (`base`/`count`, surface or grid topology) pointing into the
+shared array, and constraints store absolute particle indices. This keeps the
+substep loop a flat sweep over all particles/constraints (mirroring the rigid
+path) instead of nested per-body loops, and lets one constraint list mix soft
+and cloth. Trade-off: no per-soft-body removal yet (handles are plain indices,
+no generations) — fine for the demos, which build once.
+
+2026-06-20 — Soft-body tet meshes use Kuhn's six-tetrahedron cell decomposition
+(all six tets share the cell's 0→7 main diagonal), NOT the five-tet split. The
+five-tet split must alternate parity per cell or shared faces mismatch; Kuhn's
+tiles space consistently with one orientation, so adjacent cells always share a
+face and the boundary-extraction (a triangular face is on the surface iff it
+belongs to exactly one tet) is watertight. `ball()` clips the lattice to a
+sphere by cell centre. Consequence: the six tets of a cell alternate in winding,
+so their *signed* volumes sum to ~zero — "total volume" must sum magnitudes
+(the volume constraint preserves each tet's own signed volume, which is correct).
+
+2026-06-20 — Particle↔rigid contacts (`ParticleBodyContact`) are LINEAR-ONLY and
+two-way, deliberately matching the rigid-contact convention (the 2026-06-16
+entry): the particle is pushed out along the surface normal and the rigid body
+recoils at its centre of mass with no torque. So a soft body can shove a rigid
+body and cloth rides a moving collider, but a tumbling cube keeps tumbling under
+its own angular momentum (contacts add no spin). This is why the cloth-drape
+demo spins its cube about a near-vertical axis — end-over-end tumbling on the
+ground would need angular contact response, which is still future work. Particle
+contacts use an O(particles × bodies) sweep with an AABB reject, not the BVH:
+rigid counts are tiny in soft scenes. Bending constraints are plain
+`ParticleDistance` links between every-other particle (not dihedral angle
+constraints) — the simplest stable bending, per the task.
+
+2026-06-20 — Deforming geometry (soft-body surfaces, cloth grids) is rendered
+OUTSIDE the ECS `MeshRenderer` path: there is no entity and the vertices move
+every step. `elderforge::deformable::DeformableMeshes` owns one dynamic
+`GpuMesh` per soft body / cloth (static index buffer, `COPY_DST` vertex buffer
+restreamed each frame from particle positions via `GpuMesh::update_vertices`,
+normals recomputed CPU-side), drawn with an identity model matrix (particles are
+world-space) appended to the forward pass's draw list. The deformable→`Vertex`
+assembly lives in the elderforge crate (it bridges physics + renderer); the
+physics crate stays renderer-free. Soft bodies / cloth are NOT serialized to
+`.escene` yet — a loaded scene rebuilds an empty `DeformableMeshes` — so the
+demos build them fresh at startup. The `forward.wgsl` fragment shader became
+two-sided (flip the normal when `!front_facing`) because culling is off
+engine-wide and a flag must shade on whichever face shows; this is inert for
+solid meshes (their back faces are occluded). A `PhysicsWorld::wind` field (a
+uniform acceleration applied only to particles) was added so the flag billows —
+a flat sheet pinned at two corners at its natural width is taut and otherwise
+just hangs flat.

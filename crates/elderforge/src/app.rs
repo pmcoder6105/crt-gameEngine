@@ -15,6 +15,7 @@ use elderforge_scene::assets::{MaterialDef, MeshSource};
 use elderforge_scene::Scene;
 
 use elderforge::assets::AssetManager;
+use elderforge::deformable::DeformableMeshes;
 use elderforge::demos::{Demo, DemoAssets};
 
 use crate::systems;
@@ -29,6 +30,9 @@ pub struct Gpu {
     pub context: RenderContext,
     pub cache: ResourceCache,
     pub forward: ForwardPass,
+    /// Per-frame meshes for the scene's soft bodies and cloth, rebuilt from
+    /// particle positions each step.
+    pub deformables: DeformableMeshes,
 }
 
 pub struct App {
@@ -133,8 +137,17 @@ impl App {
         }
         let physics_ms = physics_start.elapsed().as_secs_f32() * 1000.0;
 
-        // 4. Render: 3D scene first, then the editor on top, then present.
-        systems::render::record(scene, &gpu.context, &gpu.cache, &mut gpu.forward, &mut frame);
+        // 4. Restream the soft-body / cloth meshes from their post-step particle
+        //    positions, then render: 3D scene first, editor on top, then present.
+        gpu.deformables.update(&gpu.context.queue, &scene.physics);
+        systems::render::record(
+            scene,
+            &gpu.context,
+            &gpu.cache,
+            &gpu.deformables,
+            &mut gpu.forward,
+            &mut frame,
+        );
         let (width, height) = gpu.context.size();
         editor.paint(
             &gpu.context.device,
@@ -183,6 +196,9 @@ impl App {
             .realize(&self.scene, &context.device, &context.queue)
             .context("realizing demo assets")?;
 
+        // Dynamic meshes for the demo's soft bodies / cloth (if any).
+        let deformables = DeformableMeshes::build(&context.device, &self.scene.physics);
+
         // The editor needs the device + surface format; create it here, then
         // seed the substep slider with the scene's own substep count so it
         // starts in agreement with the demo.
@@ -191,7 +207,7 @@ impl App {
         editor.editor.sim_controls.substeps = self.scene.physics.substeps;
         editor.editor.toolbar.status = format!("demo: {}", self.demo.name());
 
-        self.gpu = Some(Gpu { context, cache, forward });
+        self.gpu = Some(Gpu { context, cache, forward, deformables });
         self.editor = Some(editor);
         Ok(())
     }
@@ -228,6 +244,10 @@ fn handle_scene_io(
                     Ok(new_cache) => {
                         gpu.cache = new_cache;
                         *scene = loaded;
+                        // Rebuild the deformable meshes for the new scene (loaded
+                        // scenes carry no soft bodies yet, so this is usually empty).
+                        gpu.deformables =
+                            DeformableMeshes::build(&gpu.context.device, &scene.physics);
                         // The selected entity belonged to the old scene; clear
                         // it, and re-sync the substep slider to the new scene.
                         editor.editor.hierarchy.selected = None;

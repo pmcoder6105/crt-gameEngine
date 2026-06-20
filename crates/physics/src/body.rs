@@ -252,14 +252,6 @@ impl Default for RigidBody {
     }
 }
 
-/// Particle-based soft body, solved with XPBD distance constraints.
-#[derive(Debug, Clone, Default)]
-pub struct SoftBody {
-    pub particles: Vec<Vec3>,
-    pub inv_masses: Vec<f32>,
-    // TODO: distance-constraint network + rest shape for shape matching.
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -342,12 +334,5 @@ mod tests {
         let ground = Collider::HalfSpace { normal: Vec3::Y, offset: 0.0 };
         let far = Aabb::new(Vec3::splat(1e6), Vec3::splat(1e6 + 1.0));
         assert!(ground.aabb(Vec3::ZERO).overlaps(&far));
-    }
-
-    #[test]
-    fn soft_body_default_is_empty() {
-        let body = SoftBody::default();
-        assert!(body.particles.is_empty());
-        assert!(body.inv_masses.is_empty());
     }
 }

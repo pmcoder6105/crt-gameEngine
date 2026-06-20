@@ -7,6 +7,7 @@
 //!
 //! Skips (with a note) when no GPU adapter is available, e.g. headless CI.
 
+use elderforge::deformable::DeformableMeshes;
 use elderforge::demos::{Demo, DemoAssets, CAPSULE_BASE_HALF_HEIGHT, CAPSULE_BASE_RADIUS};
 use elderforge_core::math::Mat4;
 use elderforge_ecs::components::{Camera, MeshRenderer, PhysicsBody, Transform};
@@ -72,6 +73,15 @@ fn every_demo_builds_steps_and_renders() {
                 t.position
             );
         }
+        // Soft-body / cloth particles must stay finite too.
+        for p in scene.physics.particles() {
+            assert!(
+                p.position.is_finite(),
+                "{}: particle went non-finite: {:?}",
+                demo.name(),
+                p.position
+            );
+        }
 
         // --- Render one frame into an offscreen texture ---
         let color = device.create_texture(&wgpu::TextureDescriptor {
@@ -89,12 +99,17 @@ fn every_demo_builds_steps_and_renders() {
         let view_proj = active_camera(&scene, W as f32 / H as f32)
             .unwrap_or_else(|| panic!("{}: no active camera", demo.name()));
 
+        // Build the deforming soft-body / cloth meshes from the post-step
+        // particle state, exactly as the app does each frame.
+        let deformables = DeformableMeshes::build(&device, &scene.physics);
+
         let mut draws = Vec::new();
         for (_e, (transform, mr)) in scene.world.query::<(&Transform, &MeshRenderer)>().iter() {
             if let Some(mesh) = cache.mesh(mr.mesh) {
                 draws.push(Draw { model: transform.matrix(), mesh });
             }
         }
+        deformables.append_draws(&mut draws);
         assert!(!draws.is_empty(), "{}: nothing to draw", demo.name());
 
         let mut encoder =
