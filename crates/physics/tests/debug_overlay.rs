@@ -3,7 +3,7 @@
 //! buffers clear-and-reuse rather than accumulate.
 
 use elderforge_core::math::Vec3;
-use elderforge_physics::{Collider, DebugDraw, DebugLayers, PhysicsWorld, RigidBody};
+use elderforge_physics::{ClothDef, Collider, DebugDraw, DebugLayers, PhysicsWorld, RigidBody};
 
 /// Ground half-space, a box penetrating it (so a contact exists immediately),
 /// and a sphere above, linked to the box by a distance constraint.
@@ -102,6 +102,43 @@ fn sleep_state_and_force_layers_emit() {
     let w = world();
     assert!(!emit(&w, only(|l| l.sleep_state = true)).lines.is_empty());
     assert!(!emit(&w, only(|l| l.force_accumulators = true)).lines.is_empty());
+}
+
+/// A flat 4×4 cloth (no pins), so the world has particles and particle
+/// distance-constraints but no rigid bodies.
+fn cloth_world() -> PhysicsWorld {
+    let mut w = PhysicsWorld::new();
+    let def = ClothDef::grid(
+        4,
+        4,
+        1.0,
+        |c, r| Vec3::new(c as f32 * 0.2, 2.0, r as f32 * 0.2),
+        |_, _| false,
+    );
+    w.add_cloth(&def);
+    w
+}
+
+#[test]
+fn velocity_layer_draws_particle_arrows() {
+    let mut w = cloth_world();
+    // At rest, the velocity layer is empty (no rigid bodies, particles still).
+    assert!(emit(&w, only(|l| l.velocity_vectors = true)).lines.is_empty());
+    // Set every particle moving → an arrow each.
+    for p in w.particles_mut() {
+        p.velocity = Vec3::new(0.0, 0.0, 2.0);
+    }
+    let d = emit(&w, only(|l| l.velocity_vectors = true));
+    assert!(!d.lines.is_empty(), "moving particles should draw velocity arrows");
+}
+
+#[test]
+fn constraint_layer_draws_cloth_springs_and_anchor_points() {
+    let w = cloth_world();
+    let d = emit(&w, only(|l| l.constraint_anchors = true));
+    assert!(!d.lines.is_empty(), "cloth springs should render as lines");
+    // One anchor point per particle (the glowing web's vertices).
+    assert_eq!(d.points.len(), w.particle_count());
 }
 
 #[test]

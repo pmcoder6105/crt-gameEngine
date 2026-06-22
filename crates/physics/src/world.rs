@@ -468,6 +468,21 @@ impl PhysicsWorld {
             }
         }
 
+        // --- Particle (soft-body / cloth) velocity arrows. ---
+        // Particles are a separate DOF type from rigid bodies, so the velocity
+        // layer covers them with their own pass: an arrow per moving particle.
+        if layers.velocity_vectors {
+            for p in &self.particles {
+                if p.inv_mass == 0.0 {
+                    continue; // pinned particle (a held corner) — no motion to show
+                }
+                let v = p.velocity;
+                if v.length_squared() > VELOCITY_MIN_SQ {
+                    out.arrow(p.position, p.position + v * VELOCITY_TIME_SCALE, VELOCITY_COLOR);
+                }
+            }
+        }
+
         // --- Constraint anchors + connections. ---
         if layers.constraint_anchors {
             for c in &self.distance_constraints {
@@ -489,6 +504,19 @@ impl PhysicsWorld {
                 out.line(pa, pb, CONSTRAINT_LINK);
                 out.marker(pa, ANCHOR_SIZE, ANCHOR_COLOR);
                 out.marker(pb, ANCHOR_SIZE, ANCHOR_COLOR);
+            }
+            // Particle constraints: cloth structural/shear/bending springs and
+            // soft-body tet edges. Drawing every spring as a line renders the
+            // cloth/soft mesh as a glowing wireframe; a point marks each particle
+            // anchor. (Per-particle cube markers would be far too heavy for a
+            // thousand-particle sheet, so anchors are bare points here.)
+            for c in &self.particle_distance {
+                let pa = self.particles[c.a].position;
+                let pb = self.particles[c.b].position;
+                out.line(pa, pb, PARTICLE_SPRING);
+            }
+            for p in &self.particles {
+                out.point(p.position, ANCHOR_COLOR);
             }
         }
 
@@ -1011,6 +1039,9 @@ const CONTACT_COLOR: [f32; 4] = [1.0, 0.55, 0.1, 1.0];
 const CONTACT_NORMAL_COLOR: [f32; 4] = [1.0, 0.2, 0.2, 1.0];
 const ANCHOR_COLOR: [f32; 4] = [0.3, 0.95, 0.95, 1.0];
 const CONSTRAINT_LINK: [f32; 4] = [0.85, 0.85, 0.9, 1.0];
+/// Cloth / soft-body spring color — a bright translucent cyan so the dense web
+/// of particle constraints reads as a glowing wireframe.
+const PARTICLE_SPRING: [f32; 4] = [0.35, 0.85, 1.0, 0.7];
 const SLEEP_AWAKE: [f32; 4] = [0.3, 1.0, 0.4, 1.0];
 const SLEEP_ASLEEP: [f32; 4] = [0.5, 0.5, 0.55, 0.35];
 

@@ -88,5 +88,6 @@ pub fn setup(scene: &mut Scene, assets: &DemoAssets) -> DemoConfig {
     DemoConfig {
         anim: DemoAnim::StagedDrop(releases),
         light: None,
+        ..DemoConfig::default()
     }
 }

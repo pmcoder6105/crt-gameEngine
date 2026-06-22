@@ -12,6 +12,11 @@ mod cloth_drape;
 mod cloth_drape_showcase;
 mod cloth_flag;
 mod cloth_tear;
+mod debug_bvh;
+mod debug_cloth;
+mod debug_layers;
+mod debug_solo;
+mod debug_stack;
 mod mixed;
 mod pendulum;
 mod sandbox;
@@ -23,7 +28,7 @@ mod stress;
 use elderforge_core::handles::{MaterialHandle, MeshHandle};
 use elderforge_core::math::{Mat4, Vec3};
 use elderforge_ecs::components::{Camera, Transform};
-use elderforge_physics::PhysicsMaterial;
+use elderforge_physics::{BodyHandle, DebugLayers, PhysicsMaterial};
 use elderforge_renderer::DirectionalLight;
 use elderforge_scene::Scene;
 
@@ -84,6 +89,21 @@ pub enum Demo {
     /// A combined scene: a cloth flag, a soft body rolling down a ramp, and a
     /// rigid box stack it scatters — everything interacting at once.
     Mixed,
+    /// Debug-capture: a 15-box tower with every overlay on, toppled by a timed
+    /// sideways shove so the debug viz explodes with activity as bodies wake.
+    DebugStack,
+    /// Debug-capture: the cloth-drape showcase glowing with its constraint
+    /// springs and a velocity vector on every particle.
+    DebugCloth,
+    /// Debug-capture: the avalanche with *only* the depth-colored BVH overlay,
+    /// so the broadphase tree is seen restructuring as the spheres pour down.
+    DebugBvh,
+    /// Debug-capture: the mixed scene revealing one more overlay layer every
+    /// few seconds until all are on (a cumulative timed reveal).
+    DebugLayers,
+    /// Debug-capture: the mixed scene cycling through each overlay layer alone,
+    /// one at a time, for clean isolated shots of every layer.
+    DebugSolo,
 }
 
 impl Demo {
@@ -105,6 +125,11 @@ impl Demo {
             "softbody-drop" | "softbody_drop" | "softbodydrop" => Some(Demo::SoftbodyDrop),
             "cloth-tear" | "cloth_tear" | "clothtear" => Some(Demo::ClothTear),
             "mixed" => Some(Demo::Mixed),
+            "debug-stack" | "debug_stack" | "debugstack" => Some(Demo::DebugStack),
+            "debug-cloth" | "debug_cloth" | "debugcloth" => Some(Demo::DebugCloth),
+            "debug-bvh" | "debug_bvh" | "debugbvh" => Some(Demo::DebugBvh),
+            "debug-layers" | "debug_layers" | "debuglayers" => Some(Demo::DebugLayers),
+            "debug-solo" | "debug_solo" | "debugsolo" => Some(Demo::DebugSolo),
             _ => None,
         }
     }
@@ -124,11 +149,16 @@ impl Demo {
             Demo::SoftbodyDrop => "softbody-drop",
             Demo::ClothTear => "cloth-tear",
             Demo::Mixed => "mixed",
+            Demo::DebugStack => "debug-stack",
+            Demo::DebugCloth => "debug-cloth",
+            Demo::DebugBvh => "debug-bvh",
+            Demo::DebugLayers => "debug-layers",
+            Demo::DebugSolo => "debug-solo",
         }
     }
 
     /// Every demo, for help text and exhaustive testing.
-    pub fn all() -> [Demo; 12] {
+    pub fn all() -> [Demo; 17] {
         [
             Demo::Stacking,
             Demo::Pendulum,
@@ -142,6 +172,11 @@ impl Demo {
             Demo::SoftbodyDrop,
             Demo::ClothTear,
             Demo::Mixed,
+            Demo::DebugStack,
+            Demo::DebugCloth,
+            Demo::DebugBvh,
+            Demo::DebugLayers,
+            Demo::DebugSolo,
         ]
     }
 
@@ -163,20 +198,31 @@ impl Demo {
             Demo::SoftbodyDrop => softbody_drop::setup(scene, assets),
             Demo::ClothTear => cloth_tear::setup(scene, assets).into(),
             Demo::Mixed => mixed::setup(scene, assets).into(),
+            Demo::DebugStack => debug_stack::setup(scene, assets),
+            Demo::DebugCloth => debug_cloth::setup(scene, assets),
+            Demo::DebugBvh => debug_bvh::setup(scene, assets),
+            Demo::DebugLayers => debug_layers::setup(scene, assets),
+            Demo::DebugSolo => debug_solo::setup(scene, assets),
         }
     }
 }
 
 /// Runtime configuration a demo's `setup` hands back to the app: a per-frame
-/// [animation](DemoAnim) (camera moves, staged releases) and an optional key
-/// [light](DirectionalLight) override. Demos with neither return the default.
+/// [animation](DemoAnim) (camera moves, staged releases), an optional key
+/// [light](DirectionalLight) override, and an optional [debug-overlay
+/// schedule](DebugScript) the app drives even with no editor. Demos that want
+/// none of these return the default.
 ///
-/// Demo `setup` functions that need neither return `()`, lifted into the
-/// default via `.into()` at the dispatch site.
+/// Demo `setup` functions that need none return `()`, lifted into the default
+/// via `.into()` at the dispatch site.
 #[derive(Default)]
 pub struct DemoConfig {
     pub anim: DemoAnim,
     pub light: Option<DirectionalLight>,
+    /// Demo-driven physics debug overlays, evaluated each frame against the sim
+    /// time. The app unions these with the editor's manual toggles, so the
+    /// debug-capture demos light up their overlays with no editor present.
+    pub debug: DebugScript,
 }
 
 impl From<()> for DemoConfig {
@@ -188,6 +234,87 @@ impl From<()> for DemoConfig {
 impl From<DemoAnim> for DemoConfig {
     fn from(anim: DemoAnim) -> Self {
         DemoConfig { anim, ..DemoConfig::default() }
+    }
+}
+
+/// One physics debug overlay layer, the unit a [`DebugScript`] turns on and off.
+/// Mirrors the fields of [`DebugLayers`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DebugLayer {
+    CollisionShapes,
+    VelocityVectors,
+    AngularVelocity,
+    ContactPoints,
+    ConstraintAnchors,
+    BvhAabbs,
+    SleepState,
+    ForceAccumulators,
+}
+
+impl DebugLayer {
+    /// Enable this layer in `layers`.
+    fn set(self, layers: &mut DebugLayers) {
+        match self {
+            DebugLayer::CollisionShapes => layers.collision_shapes = true,
+            DebugLayer::VelocityVectors => layers.velocity_vectors = true,
+            DebugLayer::AngularVelocity => layers.angular_velocity = true,
+            DebugLayer::ContactPoints => layers.contact_points = true,
+            DebugLayer::ConstraintAnchors => layers.constraint_anchors = true,
+            DebugLayer::BvhAabbs => layers.bvh_aabbs = true,
+            DebugLayer::SleepState => layers.sleep_state = true,
+            DebugLayer::ForceAccumulators => layers.force_accumulators = true,
+        }
+    }
+}
+
+/// A scripted debug-overlay timeline a demo hands to the app. Each frame the app
+/// evaluates it against the running sim time to decide which overlay layers are
+/// on, then unions the result with the editor's manual toggles. This is what
+/// lets the debug-capture demos drive their overlays in `--borderless` mode,
+/// where there is no editor to tick the checkboxes.
+#[derive(Default, Clone)]
+pub enum DebugScript {
+    /// No demo-driven overlays; only the editor's toggles apply.
+    #[default]
+    None,
+    /// A fixed set of layers, on for the whole run.
+    Always(DebugLayers),
+    /// Cumulative reveal: start with nothing, then enable one more layer (in
+    /// `order`) every `interval` seconds, keeping the earlier ones on. Once all
+    /// of `order` is revealed they stay on.
+    Cumulative { order: Vec<DebugLayer>, interval: f32 },
+    /// Solo cycle: exactly one layer on at a time, advancing to the next in
+    /// `order` every `interval` seconds and wrapping around. The first layer is
+    /// on from `t = 0`.
+    Solo { order: Vec<DebugLayer>, interval: f32 },
+}
+
+impl DebugScript {
+    /// Which overlay layers are enabled at simulation time `time` (seconds).
+    pub fn layers_at(&self, time: f32) -> DebugLayers {
+        let mut layers = DebugLayers::default();
+        match self {
+            DebugScript::None => {}
+            DebugScript::Always(set) => layers = *set,
+            DebugScript::Cumulative { order, interval } => {
+                // Number of layers revealed so far: one per elapsed interval,
+                // capped at the list length. Zero until the first interval
+                // elapses, so the capture opens on a clean, overlay-free scene.
+                let step = interval.max(1e-3);
+                let revealed = (time / step).floor().max(0.0) as usize;
+                for layer in order.iter().take(revealed.min(order.len())) {
+                    layer.set(&mut layers);
+                }
+            }
+            DebugScript::Solo { order, interval } => {
+                if !order.is_empty() {
+                    let step = interval.max(1e-3);
+                    let idx = (time / step).floor().max(0.0) as usize % order.len();
+                    order[idx].set(&mut layers);
+                }
+            }
+        }
+        layers
     }
 }
 
@@ -210,6 +337,29 @@ pub enum DemoAnim {
     /// particles' inverse masses once the sim time reaches `release_at`, so a
     /// body held frozen in the air begins to fall on cue.
     StagedDrop(Vec<StagedRelease>),
+    /// Blast a set of bodies radially outward from `center` (with a slight
+    /// upward bias) at `speed` once the sim time reaches `at`, waking them — a
+    /// one-shot, contained "shockwave" that bursts a settled, sleeping pile back
+    /// into motion. `fired` latches it so it happens exactly once.
+    ///
+    /// Used by the debug-stack demo: after the sphere pile has gone to sleep,
+    /// the shockwave wakes the whole island and the bodies scatter and re-settle
+    /// within the pit, lighting up every debug overlay. (Spheres, not a box
+    /// tower: the engine's box-box contacts are linear-only and detonate when a
+    /// settled stack is disturbed, so a contained sphere pile is what reliably
+    /// gives a bounded settle → sleep → burst.)
+    Shockwave {
+        /// Bodies to blast.
+        handles: Vec<BodyHandle>,
+        /// Point the blast emanates from (roughly the pile's center).
+        center: Vec3,
+        /// Outward speed imparted to each body, in m/s.
+        speed: f32,
+        /// Sim time (seconds) at which to fire the blast.
+        at: f32,
+        /// Latched once the blast has fired, so it happens exactly once.
+        fired: bool,
+    },
 }
 
 /// One soft body in a [`DemoAnim::StagedDrop`]: the contiguous particle run to
@@ -227,13 +377,17 @@ pub struct StagedRelease {
 
 impl DemoAnim {
     /// Apply the animation for the current simulation time. Cheap and idempotent
-    /// (a released body just has its masses re-set to the same values).
-    pub fn apply(&self, scene: &mut Scene, time: f32) {
+    /// for the continuous animations (a released body just has its masses re-set
+    /// to the same values); the one-shot [`ImpulseAt`](DemoAnim::ImpulseAt)
+    /// latches itself so it fires exactly once, which is why this takes
+    /// `&mut self`.
+    pub fn apply(&mut self, scene: &mut Scene, time: f32) {
         match self {
             DemoAnim::None => {}
             DemoAnim::OrbitCamera { center, radius, height, period } => {
                 let theta = std::f32::consts::TAU * time / period.max(1e-3);
-                let eye = *center + Vec3::new(radius * theta.cos(), *height, radius * theta.sin());
+                let eye =
+                    *center + Vec3::new(*radius * theta.cos(), *height, *radius * theta.sin());
                 let world = Mat4::look_at_rh(eye, *center, Vec3::Y).inverse();
                 let (_, rotation, position) = world.to_scale_rotation_translation();
                 for (_e, (camera, transform)) in
@@ -254,6 +408,28 @@ impl DemoAnim {
                             particles[release.base + i].inv_mass = w;
                         }
                     }
+                }
+            }
+            DemoAnim::Shockwave { handles, center, speed, at, fired } => {
+                if !*fired && time >= *at {
+                    for &handle in handles.iter() {
+                        if let Some(body) = scene.physics.body_mut(handle) {
+                            // Radial direction from the blast center, biased
+                            // upward so the pile bursts up and out. Bodies at the
+                            // exact center fall back on straight up.
+                            let mut dir =
+                                (body.position - *center + Vec3::Y * 0.5).normalize_or_zero();
+                            if dir == Vec3::ZERO {
+                                dir = Vec3::Y;
+                            }
+                            body.linear_velocity = dir * *speed;
+                            // Wake it directly: a sleeping body skips integration,
+                            // so the blast would otherwise be ignored. Its motion
+                            // then keeps it (and its island) awake.
+                            body.sleeping = false;
+                        }
+                    }
+                    *fired = true;
                 }
             }
         }
@@ -308,6 +484,7 @@ impl Rng {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use elderforge_physics::{Collider, RigidBody};
 
     #[test]
     fn names_round_trip() {
@@ -315,6 +492,81 @@ mod tests {
             assert_eq!(Demo::from_name(demo.name()), Some(demo));
         }
         assert_eq!(Demo::from_name("STACKING"), Some(Demo::Stacking));
+        assert_eq!(Demo::from_name("debug-stack"), Some(Demo::DebugStack));
+        assert_eq!(Demo::from_name("debug_layers"), Some(Demo::DebugLayers));
         assert_eq!(Demo::from_name("nope"), None);
+    }
+
+    #[test]
+    fn cumulative_reveals_layers_one_interval_at_a_time() {
+        let script = DebugScript::Cumulative {
+            order: vec![DebugLayer::CollisionShapes, DebugLayer::BvhAabbs],
+            interval: 4.0,
+        };
+        // Opens on a clean, overlay-free scene.
+        assert_eq!(script.layers_at(0.0), DebugLayers::default());
+        assert_eq!(script.layers_at(3.9), DebugLayers::default());
+        // First layer once the first interval elapses; the second still off.
+        let at5 = script.layers_at(5.0);
+        assert!(at5.collision_shapes && !at5.bvh_aabbs);
+        // Both on (and latched) well past the last interval.
+        let at100 = script.layers_at(100.0);
+        assert!(at100.collision_shapes && at100.bvh_aabbs);
+    }
+
+    #[test]
+    fn solo_cycles_exactly_one_layer_and_wraps() {
+        let script = DebugScript::Solo {
+            order: vec![DebugLayer::CollisionShapes, DebugLayer::BvhAabbs],
+            interval: 4.0,
+        };
+        let t0 = script.layers_at(0.0);
+        assert!(t0.collision_shapes && !t0.bvh_aabbs);
+        let t5 = script.layers_at(5.0);
+        assert!(!t5.collision_shapes && t5.bvh_aabbs);
+        // Past the end of the list it wraps back to the first.
+        let t9 = script.layers_at(9.0);
+        assert!(t9.collision_shapes && !t9.bvh_aabbs);
+    }
+
+    #[test]
+    fn shockwave_fires_once_and_blasts_bodies_outward() {
+        let mut scene = Scene::new();
+        // Two bodies either side of the origin, so the radial blast sends them
+        // in opposite directions.
+        let left = scene.physics.add_rigid_body(RigidBody::dynamic(
+            Vec3::new(-1.0, 0.0, 0.0),
+            1.0,
+            Collider::Sphere { radius: 0.3 },
+        ));
+        let right = scene.physics.add_rigid_body(RigidBody::dynamic(
+            Vec3::new(1.0, 0.0, 0.0),
+            1.0,
+            Collider::Sphere { radius: 0.3 },
+        ));
+        let mut anim = DemoAnim::Shockwave {
+            handles: vec![left, right],
+            center: Vec3::ZERO,
+            speed: 5.0,
+            at: 5.0,
+            fired: false,
+        };
+        // Before the cue: untouched.
+        anim.apply(&mut scene, 4.9);
+        assert_eq!(scene.physics.body(left).expect("body").linear_velocity, Vec3::ZERO);
+        // At the cue: each body is blasted outward (opposite X directions).
+        anim.apply(&mut scene, 5.1);
+        let vl = scene.physics.body(left).expect("body").linear_velocity;
+        let vr = scene.physics.body(right).expect("body").linear_velocity;
+        assert!(vl.x < 0.0 && vr.x > 0.0, "bodies should fly apart: {vl:?} {vr:?}");
+        assert!((vl.length() - 5.0).abs() < 1e-3, "blast speed should be 5");
+        // Later: it does not fire again.
+        let captured = vl;
+        anim.apply(&mut scene, 6.0);
+        assert_eq!(
+            scene.physics.body(left).expect("body").linear_velocity,
+            captured,
+            "the blast must fire exactly once"
+        );
     }
 }

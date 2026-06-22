@@ -62,6 +62,22 @@ impl DebugLayers {
             || self.sleep_state
             || self.force_accumulators
     }
+
+    /// Field-wise OR of two layer sets: a layer is on if it's on in either.
+    /// Lets the app overlay a demo-driven schedule on top of the editor's
+    /// manual toggles (a layer shows if the demo *or* the user enabled it).
+    pub fn union(self, other: DebugLayers) -> DebugLayers {
+        DebugLayers {
+            collision_shapes: self.collision_shapes || other.collision_shapes,
+            velocity_vectors: self.velocity_vectors || other.velocity_vectors,
+            angular_velocity: self.angular_velocity || other.angular_velocity,
+            contact_points: self.contact_points || other.contact_points,
+            constraint_anchors: self.constraint_anchors || other.constraint_anchors,
+            bvh_aabbs: self.bvh_aabbs || other.bvh_aabbs,
+            sleep_state: self.sleep_state || other.sleep_state,
+            force_accumulators: self.force_accumulators || other.force_accumulators,
+        }
+    }
 }
 
 /// Accumulated debug geometry for one frame: a flat list of line segments and a

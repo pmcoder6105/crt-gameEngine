@@ -18,7 +18,7 @@ use elderforge_scene::Scene;
 use elderforge::assets::AssetManager;
 use elderforge::debug_overlay::DebugOverlay;
 use elderforge::deformable::DeformableMeshes;
-use elderforge::demos::{Demo, DemoAnim, DemoAssets};
+use elderforge::demos::{Demo, DemoAnim, DemoAssets, DebugScript};
 
 use crate::systems;
 
@@ -68,6 +68,11 @@ pub struct App {
     /// This demo's scripted per-frame animation (camera orbits, staged drops),
     /// captured from `Demo::setup` and applied each frame with the sim time.
     anim: DemoAnim,
+    /// This demo's scripted debug-overlay schedule, captured from `Demo::setup`.
+    /// Evaluated each frame against the sim time and unioned with the editor's
+    /// manual toggles, so the debug-capture demos drive their overlays even in
+    /// borderless mode (no editor).
+    debug_script: DebugScript,
     /// Accumulated simulation time in seconds, advanced only while physics
     /// steps; drives [`anim`](Self::anim).
     sim_time: f32,
@@ -92,6 +97,7 @@ impl App {
             gpu: None,
             editor: None,
             anim: DemoAnim::None,
+            debug_script: DebugScript::None,
             sim_time: 0.0,
             debug_overlay: DebugOverlay::new(),
             asset_manager: AssetManager::new(),
@@ -124,7 +130,16 @@ impl App {
         };
 
         let Self {
-            scene, gpu, editor, fixed, anim, sim_time, debug_overlay, asset_manager, ..
+            scene,
+            gpu,
+            editor,
+            fixed,
+            anim,
+            debug_script,
+            sim_time,
+            debug_overlay,
+            asset_manager,
+            ..
         } = self;
         let gpu = gpu.as_mut().expect("gpu initialized above");
 
@@ -185,9 +200,11 @@ impl App {
         *sim_time += steps as f32 * fixed.target_dt();
         anim.apply(scene, *sim_time);
 
-        // 3. Rebuild the physics debug overlay for this frame from the enabled
-        //    editor toggles (no editor → all layers off → empty/cheap).
-        let layers = editor
+        // 3. Rebuild the physics debug overlay for this frame. A layer shows if
+        //    the editor's manual toggle has it on OR the demo's debug schedule
+        //    enables it at the current sim time — so the debug-capture demos
+        //    drive their own overlays even with no editor (borderless mode).
+        let editor_layers = editor
             .as_ref()
             .map(|e| {
                 let o = &e.editor.overlays;
@@ -203,6 +220,7 @@ impl App {
                 }
             })
             .unwrap_or_default();
+        let layers = editor_layers.union(debug_script.layers_at(*sim_time));
         debug_overlay.update(&scene.physics, layers);
 
         // 4. Restream the soft-body / cloth meshes from their post-step particle
@@ -283,6 +301,7 @@ impl App {
             forward.set_clear_color(wgpu::Color::BLACK);
         }
         self.anim = config.anim;
+        self.debug_script = config.debug;
 
         let cache = self
             .asset_manager

@@ -101,5 +101,6 @@ pub fn setup(scene: &mut Scene, assets: &DemoAssets) -> DemoConfig {
             direction: Vec3::new(-0.6, 0.85, 0.3),
             color: Vec3::new(1.0, 0.86, 0.66),
         }),
+        ..DemoConfig::default()
     }
 }

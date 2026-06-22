@@ -611,10 +611,45 @@ cargo test               # run all unit + integration tests
   `tests/debug_render.rs` that emits every layer and reads back the overlay over
   black (4.6k lit px; dumps `$TMPDIR/elderforge_debug_overlay.ppm`). Full
   workspace suite green; verified live in windowed and borderless+MSAA runs.
-- Next: angular contact response (contacts are still linear-only — fine for
-  centered/axis-aligned cases, but a box can't yet tip over a contact edge or
-  pick up spin from an off-center hit), persistent BVH refit inside the world
-  (currently rebuilt per substep), and the real PBR render pass.
+- Completed: five debug-visualization capture demos (phase 16), for recording
+  the physics debug overlay. **Physics**: `emit_debug` now also covers
+  *particles* — the velocity layer draws an arrow per moving soft-body/cloth
+  particle, and the constraint-anchor layer renders every particle distance
+  constraint as a line (a glowing cyan `PARTICLE_SPRING` web) plus a point at
+  each particle, so cloth/soft bodies light up the overlay like rigid bodies do
+  (previously only rigid bodies emitted). `DebugLayers::union` field-wise ORs
+  two layer sets. **Demo infra** (`demos/mod.rs`): `DemoConfig` gained a
+  `debug: DebugScript` the app evaluates each frame against sim time and
+  **unions with the editor toggles**, so the capture demos drive their own
+  overlays in `--borderless` mode (no editor to tick the checkboxes). A
+  `DebugScript` is `None` / `Always(DebugLayers)` / `Cumulative{order,interval}`
+  (reveal one more layer each interval, opens clean) / `Solo{order,interval}`
+  (one layer at a time, wrapping); `DebugLayer` is the single-layer selector.
+  `DemoAnim` gained `Shockwave{handles,center,speed,at,fired}` — a one-shot
+  radial velocity blast (so `apply` now takes `&mut self`). **App**: a
+  `debug_script` field captured from the config; `update` unions `editor_layers`
+  with `debug_script.layers_at(sim_time)`. **The five demos** (`--demo <name>
+  --borderless --msaa 4` at 1920×1080, all verified): `debug-bvh` (avalanche,
+  BVH-only), `debug-layers` (mixed scene, cumulative reveal of collision →
+  velocity → contact → constraint → bvh every 4 s), `debug-solo` (mixed scene,
+  all 8 layers cycled solo every 4 s), `debug-cloth` (the cloth-drape showcase
+  reused verbatim, constraint web + per-particle velocity arrows glowing), and
+  `debug-stack` (see decisions log — a sphere pile, NOT a box tower). Tests:
+  physics particle velocity/constraint emit; `demos/mod.rs` unit tests for
+  `DebugScript` timing + `Shockwave` one-shot; a GPU-free `tests/debug_demos.rs`
+  asserting each demo's scripted layers emit the right geometry; `demos_render`
+  now exercises all 17 demos. Full suite green.
+- Next: **rigid box-box contact stability** is the headline gap surfaced by the
+  debug-stack work — a settled box stack *detonates* (bodies → ±1e4) the moment
+  any load-bearing box is disturbed, and even angled box *piles* blow up;
+  stability is a chaotic lottery in (height, substeps) and is wrecked by adding
+  unrelated bodies. Only gentle settling of axis-aligned boxes (and spheres
+  generally) is robust — which is why debug-stack uses a sphere pile. Likely
+  rooted in the linear-only contacts + box-box EPA degeneracy; wants proper
+  contact-normal caching / warm-starting and angular contact response. Also
+  pending: angular contact response (a box can't tip over a contact edge or pick
+  up spin from an off-center hit), persistent BVH refit inside the world
+  (rebuilt per substep), and the real PBR render pass.
 
 ---
 
@@ -926,3 +961,34 @@ color/depth targets (the overlay would otherwise need to render into the MSAA
 target before resolve) and matches the "overlay on top" intent: a velocity
 vector behind a box is still visible. Frame order is forward (→resolve) → debug
 → egui, all writing the one surface texture.
+
+2026-06-22 — Debug-capture demos drive their overlays through a demo-owned
+`DebugScript` on `DemoConfig` (in `elderforge::demos`), NOT the editor toggles.
+The app each frame evaluates `debug_script.layers_at(sim_time)` and **unions** it
+with the editor-derived layers (`DebugLayers::union`), so the demo's schedule and
+the user's manual checkboxes compose (a layer shows if either turns it on). This
+is what makes the overlays appear in `--borderless` mode, where `editor` is
+`None` and the editor toggles don't exist. Three schedule shapes: `Always(set)`,
+`Cumulative{order,interval}` (opens overlay-free, reveals one more layer per
+interval — `debug-layers`), `Solo{order,interval}` (one layer at a time, wrapping
+— `debug-solo`). `emit_debug` was also extended to cover *particles*: the
+velocity and constraint-anchor layers now draw soft-body/cloth particles (the
+constraint layer renders every `particle_distance` as a glowing-cyan spring line
++ a point per particle), since before only rigid bodies emitted — `debug-cloth`
+needs the cloth's own constraint web to light up.
+
+2026-06-22 — `debug-stack` is a SPHERE pile burst by a `DemoAnim::Shockwave`, NOT
+the spec's "15-box tower toppled by pushing the bottom box". That scenario is
+unbuildable on this solver: a settled rigid box stack DETONATES (positions →
+±1e4, bodies fly off-frame) the instant any load-bearing box is disturbed — at
+every count and kick magnitude tested — and even angled box *piles* blow up;
+settle-stability itself is a chaotic lottery in (box count, substeps) that adding
+an unrelated body (e.g. a frozen wrecking ball) flips to unstable. Only gentle
+settling of axis-aligned boxes, and spheres in general (analytic contacts), are
+robust. So debug-stack drops 16 spheres into an invisible-walled pit (substeps
+15), lets them settle and sleep (sleep overlay dims them), then at t=5 s a
+one-shot radial `Shockwave` blasts them outward from the pile centre — all 16
+wake, scatter/ricochet within the pit, and re-settle, fully bounded (max |pos|
+~2). This preserves the capture's INTENT (settle → sleep → burst lighting up
+every overlay) which the box version can't deliver. The root cause (linear-only
+contacts + box-box EPA degeneracy) is logged in Active work as the top "Next".
