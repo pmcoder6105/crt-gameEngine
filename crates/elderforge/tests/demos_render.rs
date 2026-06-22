@@ -47,7 +47,7 @@ fn every_demo_builds_steps_and_renders() {
     let material = cache.insert_material(Default::default());
     let assets = DemoAssets { cube, sphere, capsule, plane, material };
 
-    let mut forward = ForwardPass::new(&device, FORMAT, (W, H));
+    let mut forward = ForwardPass::new(&device, FORMAT, (W, H), 1);
 
     for demo in Demo::all() {
         let mut scene = Scene::new();

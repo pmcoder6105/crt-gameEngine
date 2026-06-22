@@ -39,6 +39,9 @@ pub struct WindowConfig {
     pub height: u32,
     /// Whether the user can resize the window.
     pub resizable: bool,
+    /// Whether the OS draws a title bar and frame. `false` gives a borderless
+    /// window — used for clean, chrome-free demo capture.
+    pub decorations: bool,
     /// Whether presentation should wait for vertical sync. The window
     /// itself doesn't act on this; the renderer reads it via
     /// [`WindowHandle::vsync`] when choosing a surface present mode.
@@ -52,6 +55,7 @@ impl Default for WindowConfig {
             width: 1600,
             height: 900,
             resizable: true,
+            decorations: true,
             vsync: true,
         }
     }
@@ -203,7 +207,8 @@ where
         let attributes = Window::default_attributes()
             .with_title(self.config.title.clone())
             .with_inner_size(LogicalSize::new(self.config.width, self.config.height))
-            .with_resizable(self.config.resizable);
+            .with_resizable(self.config.resizable)
+            .with_decorations(self.config.decorations);
         match event_loop.create_window(attributes) {
             Ok(window) => {
                 window.request_redraw();

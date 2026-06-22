@@ -4,6 +4,7 @@ use elderforge_core::math::{Quat, Vec3};
 
 use crate::body::{BodyHandle, BodyKind, Collider, RigidBody};
 use crate::broadphase::{Aabb, Bvh};
+use crate::debug::{DebugDraw, DebugLayers};
 use crate::narrowphase::{collide, surface_support, AnyShape, ContactManifold, Pose};
 use crate::shapes::{BoxShape, Capsule, Sphere};
 use crate::soft::{Cloth, ClothDef, ClothHandle, Particle, SoftBody, SoftBodyDef, SoftBodyHandle};
@@ -367,6 +368,13 @@ impl PhysicsWorld {
         &self.particles
     }
 
+    /// Mutable view of all particles, for animation that pokes the cloud
+    /// directly — e.g. a staged drop that pins a soft body (zero inverse mass)
+    /// until its release time, then restores its masses so gravity takes it.
+    pub fn particles_mut(&mut self) -> &mut [Particle] {
+        &mut self.particles
+    }
+
     /// Total particle count across all soft bodies and cloths.
     pub fn particle_count(&self) -> usize {
         self.particles.len()
@@ -402,6 +410,172 @@ impl PhysicsWorld {
     pub fn cloth_particles(&self, handle: ClothHandle) -> Option<&[Particle]> {
         let c = self.cloths.get(handle.0)?;
         Some(&self.particles[c.base..c.base + c.particle_count()])
+    }
+
+    /// Emit this frame's debug-overlay geometry for the enabled `layers` into
+    /// `out` (cleared first), reusing its buffers. Only enabled layers are
+    /// computed, so an all-off [`DebugLayers`] returns almost immediately.
+    ///
+    /// The contact and BVH layers recompute their own broadphase/narrowphase
+    /// from the current state rather than reading the solver's per-substep
+    /// scratch (which isn't retained), so the overlay is correct even while the
+    /// scene is asleep. This is debug-only work, gated on the layer being on.
+    pub fn emit_debug(&self, layers: DebugLayers, out: &mut DebugDraw) {
+        out.clear();
+        if !layers.any() {
+            return;
+        }
+
+        // --- Per-body overlays. ---
+        for body in &self.bodies {
+            if body.removed {
+                continue;
+            }
+            if layers.collision_shapes {
+                self.emit_collider_wire(out, body, kind_color(body.kind));
+            }
+            if !body.is_dynamic() {
+                continue;
+            }
+            // Sleep state only means something for dynamic bodies.
+            if layers.sleep_state {
+                let color = if body.sleeping { SLEEP_ASLEEP } else { SLEEP_AWAKE };
+                self.emit_collider_wire(out, body, color);
+            }
+            if layers.velocity_vectors {
+                let v = body.linear_velocity;
+                if v.length_squared() > VELOCITY_MIN_SQ {
+                    out.arrow(body.position, body.position + v * VELOCITY_TIME_SCALE, VELOCITY_COLOR);
+                }
+            }
+            if layers.angular_velocity {
+                let w = body.angular_velocity;
+                let speed = w.length();
+                if speed > ANGULAR_MIN {
+                    let radius = body_extent(body).max(0.25);
+                    let sweep = (speed * ANGULAR_TIME_SCALE)
+                        .clamp(0.2, 1.75 * std::f32::consts::PI);
+                    out.arc(body.position, w, radius, sweep, ANGULAR_COLOR);
+                }
+            }
+            if layers.force_accumulators && !body.sleeping {
+                // The only persistent external force in the solver is gravity, so
+                // the net accumulated force on a free body is m·g.
+                let force = self.gravity * body.mass;
+                if force.length_squared() > 1e-6 {
+                    out.arrow(body.position, body.position + force * FORCE_SCALE, FORCE_COLOR);
+                }
+            }
+        }
+
+        // --- Constraint anchors + connections. ---
+        if layers.constraint_anchors {
+            for c in &self.distance_constraints {
+                if c.body_a >= self.bodies.len() || c.body_b >= self.bodies.len() {
+                    continue;
+                }
+                let pa = self.bodies[c.body_a].position;
+                let pb = self.bodies[c.body_b].position;
+                out.line(pa, pb, CONSTRAINT_LINK);
+                out.marker(pa, ANCHOR_SIZE, ANCHOR_COLOR);
+                out.marker(pb, ANCHOR_SIZE, ANCHOR_COLOR);
+            }
+            for j in &self.joints {
+                let (a, b) = j.bodies();
+                if a >= self.bodies.len() || b >= self.bodies.len() {
+                    continue;
+                }
+                let (pa, pb) = j.world_anchors(&self.bodies);
+                out.line(pa, pb, CONSTRAINT_LINK);
+                out.marker(pa, ANCHOR_SIZE, ANCHOR_COLOR);
+                out.marker(pb, ANCHOR_SIZE, ANCHOR_COLOR);
+            }
+        }
+
+        // --- BVH + contacts: both ride one broadphase build over finite bodies. ---
+        if layers.bvh_aabbs || layers.contact_points {
+            let mut finite_idx = Vec::new();
+            let mut finite_aabbs = Vec::new();
+            let mut unbounded = Vec::new();
+            for (i, body) in self.bodies.iter().enumerate() {
+                if body.removed {
+                    continue;
+                }
+                let aabb = body.collider.aabb(body.position);
+                if aabb.is_finite() {
+                    finite_idx.push(i);
+                    finite_aabbs.push(aabb);
+                } else {
+                    unbounded.push(i);
+                }
+            }
+            let bvh = Bvh::build(&finite_aabbs);
+
+            if layers.bvh_aabbs {
+                let levels = bvh.debug_iter_levels();
+                let max_depth = levels.iter().map(|(_, d)| *d).max().unwrap_or(0);
+                for (aabb, depth) in levels {
+                    out.wire_aabb(aabb.min, aabb.max, depth_color(depth, max_depth));
+                }
+            }
+
+            if layers.contact_points {
+                for (la, lb) in bvh.query_pairs() {
+                    self.emit_contact(out, finite_idx[la], finite_idx[lb]);
+                }
+                for &u in &unbounded {
+                    for &f in &finite_idx {
+                        self.emit_contact(out, u, f);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Narrowphase one body pair and, if they touch, emit a contact-point marker
+    /// and a normal arrow.
+    fn emit_contact(&self, out: &mut DebugDraw, i: usize, j: usize) {
+        if let Some(m) = self.debug_manifold(i, j) {
+            out.wire_sphere(m.contact_point, CONTACT_MARKER_RADIUS, CONTACT_COLOR);
+            out.point(m.contact_point, CONTACT_COLOR);
+            out.arrow(
+                m.contact_point,
+                m.contact_point + m.normal * CONTACT_NORMAL_LEN,
+                CONTACT_NORMAL_COLOR,
+            );
+        }
+    }
+
+    /// Contact manifold for a body pair at the current state, for debug
+    /// visualization. Unlike [`make_contact`](Self::make_contact) it keeps the
+    /// manifold's contact point and ignores the sleeping short-circuit.
+    fn debug_manifold(&self, i: usize, j: usize) -> Option<ContactManifold> {
+        if i == j {
+            return None;
+        }
+        let (lo, hi) = if i < j { (i, j) } else { (j, i) };
+        let a = &self.bodies[lo];
+        let b = &self.bodies[hi];
+        if a.removed || b.removed || (a.inv_mass == 0.0 && b.inv_mass == 0.0) {
+            return None;
+        }
+        world_collide(a.collider, pose_of(a), b.collider, pose_of(b))
+    }
+
+    /// Emit a body's collider as a wireframe in `color`.
+    fn emit_collider_wire(&self, out: &mut DebugDraw, body: &RigidBody, color: [f32; 4]) {
+        match body.collider {
+            Collider::Sphere { radius } => out.wire_sphere(body.position, radius, color),
+            Collider::Box { half_extents } => {
+                out.wire_box(body.position, half_extents, body.rotation, color)
+            }
+            Collider::Capsule { radius, half_height } => {
+                out.wire_capsule(body.position, radius, half_height, body.rotation, color)
+            }
+            Collider::HalfSpace { normal, offset } => {
+                emit_halfspace(out, normal, offset, color)
+            }
+        }
     }
 
     /// Advance the simulation by `frame_dt` seconds via the XPBD substep loop.
@@ -827,6 +1001,98 @@ fn halfspace_contact(
         normal: plane_normal,
         depth: -signed,
     })
+}
+
+// --- Debug overlay palette and scales (see `emit_debug`). ---
+const VELOCITY_COLOR: [f32; 4] = [1.0, 0.95, 0.2, 1.0];
+const ANGULAR_COLOR: [f32; 4] = [1.0, 0.3, 0.9, 1.0];
+const FORCE_COLOR: [f32; 4] = [1.0, 0.5, 0.15, 1.0];
+const CONTACT_COLOR: [f32; 4] = [1.0, 0.55, 0.1, 1.0];
+const CONTACT_NORMAL_COLOR: [f32; 4] = [1.0, 0.2, 0.2, 1.0];
+const ANCHOR_COLOR: [f32; 4] = [0.3, 0.95, 0.95, 1.0];
+const CONSTRAINT_LINK: [f32; 4] = [0.85, 0.85, 0.9, 1.0];
+const SLEEP_AWAKE: [f32; 4] = [0.3, 1.0, 0.4, 1.0];
+const SLEEP_ASLEEP: [f32; 4] = [0.5, 0.5, 0.55, 0.35];
+
+/// Seconds of travel an arrow represents, so its length scales with speed.
+const VELOCITY_TIME_SCALE: f32 = 0.15;
+/// Below this speed (m/s) a velocity arrow is omitted (avoids jitter noise).
+const VELOCITY_MIN_SQ: f32 = 0.05 * 0.05;
+/// Below this angular speed (rad/s) the spin arc is omitted.
+const ANGULAR_MIN: f32 = 0.1;
+/// Radians of arc per (rad/s) of spin, before clamping.
+const ANGULAR_TIME_SCALE: f32 = 0.25;
+/// Metres of arrow per newton of force.
+const FORCE_SCALE: f32 = 0.03;
+/// Contact-point marker sphere radius.
+const CONTACT_MARKER_RADIUS: f32 = 0.06;
+/// Length of a contact-normal arrow.
+const CONTACT_NORMAL_LEN: f32 = 0.5;
+/// Half-size of a constraint-anchor cube marker.
+const ANCHOR_SIZE: f32 = 0.07;
+/// Half-extent of the grid patch drawn for an (infinite) half-space.
+const HALFSPACE_GRID_HALF: f32 = 10.0;
+/// Grid divisions across a half-space patch.
+const HALFSPACE_GRID_LINES: usize = 8;
+
+/// Collider wireframe color by body kind.
+fn kind_color(kind: BodyKind) -> [f32; 4] {
+    match kind {
+        BodyKind::Dynamic => [0.2, 1.0, 0.35, 1.0],
+        BodyKind::Static => [0.45, 0.55, 0.75, 1.0],
+        BodyKind::Kinematic => [0.2, 0.9, 0.95, 1.0],
+    }
+}
+
+/// A BVH node's color by depth: a red (root) → green → blue (deep) ramp, at low
+/// alpha so nested boxes stay legible.
+fn depth_color(depth: usize, max_depth: usize) -> [f32; 4] {
+    let t = if max_depth == 0 {
+        0.0
+    } else {
+        depth as f32 / max_depth as f32
+    };
+    // Two-segment lerp: red→green over [0,0.5], green→blue over [0.5,1].
+    let (r, g, b) = if t < 0.5 {
+        let k = t * 2.0;
+        (1.0 - 0.8 * k, 0.2 + 0.8 * k, 0.2)
+    } else {
+        let k = (t - 0.5) * 2.0;
+        (0.2, 1.0 - 0.7 * k, 0.2 + 0.8 * k)
+    };
+    [r, g, b, 0.55]
+}
+
+/// Rough bounding radius of a collider, for sizing angular-velocity arcs.
+fn body_extent(body: &RigidBody) -> f32 {
+    match body.collider {
+        Collider::Sphere { radius } => radius,
+        Collider::Box { half_extents } => half_extents.length(),
+        Collider::Capsule { radius, half_height } => half_height + radius,
+        Collider::HalfSpace { .. } => 0.5,
+    }
+}
+
+/// Draw a finite grid patch (plus a normal arrow) standing in for an infinite
+/// half-space, centered on the foot of the plane normal from the origin.
+fn emit_halfspace(out: &mut DebugDraw, normal: Vec3, offset: f32, color: [f32; 4]) {
+    let n = normal.normalize_or_zero();
+    if n == Vec3::ZERO {
+        return;
+    }
+    let center = n * offset;
+    // In-plane basis: pick the axis least aligned with the normal.
+    let seed = if n.x.abs() < 0.9 { Vec3::X } else { Vec3::Y };
+    let u = (seed - n * seed.dot(n)).normalize();
+    let v = n.cross(u);
+    let half = HALFSPACE_GRID_HALF;
+    let lines = HALFSPACE_GRID_LINES;
+    for k in 0..=lines {
+        let t = -half + 2.0 * half * k as f32 / lines as f32;
+        out.line(center + u * t - v * half, center + u * t + v * half, color);
+        out.line(center + v * t - u * half, center + v * t + u * half, color);
+    }
+    out.arrow(center, center + n, color);
 }
 
 impl Default for PhysicsWorld {

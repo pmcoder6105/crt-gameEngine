@@ -13,6 +13,10 @@ pub struct PipelineBuilder<'a> {
     pub label: &'a str,
     pub shader_source: &'a str,
     pub depth_test: bool,
+    /// MSAA sample count. `1` disables multisampling; `2`/`4`/`8` enable it.
+    /// The pass this pipeline runs in must supply color (and depth) attachments
+    /// with a matching sample count.
+    pub sample_count: u32,
 }
 
 impl<'a> PipelineBuilder<'a> {
@@ -21,11 +25,18 @@ impl<'a> PipelineBuilder<'a> {
             label,
             shader_source,
             depth_test: true,
+            sample_count: 1,
         }
     }
 
     pub fn depth_test(mut self, enabled: bool) -> Self {
         self.depth_test = enabled;
+        self
+    }
+
+    /// Set the MSAA sample count (clamped to at least 1).
+    pub fn sample_count(mut self, count: u32) -> Self {
+        self.sample_count = count.max(1);
         self
     }
 
@@ -71,7 +82,10 @@ impl<'a> PipelineBuilder<'a> {
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
-            multisample: wgpu::MultisampleState::default(),
+            multisample: wgpu::MultisampleState {
+                count: self.sample_count,
+                ..wgpu::MultisampleState::default()
+            },
             multiview: None,
             cache: None,
         })

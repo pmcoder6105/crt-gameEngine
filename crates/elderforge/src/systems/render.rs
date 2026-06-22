@@ -2,22 +2,28 @@
 
 use elderforge_core::math::Mat4;
 use elderforge_ecs::components::{Camera, MeshRenderer, Transform};
-use elderforge_renderer::{Draw, ForwardPass, FrameContext, RenderContext, ResourceCache};
+use elderforge_renderer::{
+    DebugPass, Draw, ForwardPass, FrameContext, RenderContext, ResourceCache,
+};
 use elderforge_scene::Scene;
 
+use elderforge::debug_overlay::DebugOverlay;
 use elderforge::deformable::DeformableMeshes;
 
-/// Record the 3D forward pass for `scene` into `frame`. The caller owns the
-/// frame lifecycle (acquire / present) so it can also record the editor's egui
-/// pass into the same encoder before presenting. `deformables` carries the
-/// per-frame soft-body / cloth meshes, drawn in world space alongside the static
-/// `MeshRenderer` entities.
+/// Record the 3D forward pass for `scene` into `frame`, then the physics debug
+/// overlay on top of it. The caller owns the frame lifecycle (acquire / present)
+/// so it can also record the editor's egui pass into the same encoder before
+/// presenting. `deformables` carries the per-frame soft-body / cloth meshes,
+/// drawn in world space alongside the static `MeshRenderer` entities; `overlay`
+/// carries this frame's debug lines/points (empty when no layer is enabled).
 pub fn record(
     scene: &Scene,
     context: &RenderContext,
     cache: &ResourceCache,
     deformables: &DeformableMeshes,
     forward: &mut ForwardPass,
+    debug: &mut DebugPass,
+    overlay: &DebugOverlay,
     frame: &mut FrameContext,
 ) {
     let (width, height) = context.size();
@@ -43,6 +49,18 @@ pub fn record(
         &frame.view,
         view_proj,
         &draws,
+    );
+
+    // Physics debug overlay, loaded on top of the 3D frame (under the same
+    // camera). A no-op when `overlay` has no geometry.
+    debug.render(
+        &context.device,
+        &context.queue,
+        &mut frame.encoder,
+        &frame.view,
+        view_proj,
+        overlay.lines(),
+        overlay.points(),
     );
 }
 

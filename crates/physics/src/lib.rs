@@ -14,6 +14,7 @@ pub mod solver;
 pub mod world;
 
 pub use body::{BodyHandle, BodyKind, Collider, RigidBody};
+pub use debug::{DebugDraw, DebugLayers, DebugLine, DebugPoint};
 pub use material::{CombinedMaterial, PhysicsMaterial};
 pub use shapes::ColliderShape;
 pub use soft::{

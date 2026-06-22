@@ -96,7 +96,7 @@ fn scene_renders_cubes_on_ground() {
     assert!(lowest < 2.0, "cubes should have fallen; lowest y = {lowest}");
 
     // --- Render one frame into an offscreen texture ---
-    let mut forward = ForwardPass::new(&device, FORMAT, (W, H));
+    let mut forward = ForwardPass::new(&device, FORMAT, (W, H), 1);
     let color = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("offscreen color"),
         size: wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },

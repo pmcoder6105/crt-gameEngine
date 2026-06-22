@@ -17,7 +17,8 @@ pub use cache::ResourceCache;
 pub use camera::Camera;
 pub use context::{FrameContext, RenderContext};
 pub use mesh::{GpuMesh, Vertex};
-pub use passes::forward::{Draw, ForwardPass};
+pub use passes::debug::{DebugPass, DebugVertex};
+pub use passes::forward::{DirectionalLight, Draw, ForwardPass};
 pub use texture::GpuTexture;
 
 #[derive(Debug, Error)]

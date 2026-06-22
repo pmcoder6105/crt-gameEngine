@@ -10,15 +10,32 @@ use elderforge_core::time::FixedTimestep;
 use elderforge_editor::{EditorState, EditorStats};
 use elderforge_platform::time::Clock;
 use elderforge_platform::{RawWindowEvent, WindowHandle};
-use elderforge_renderer::{ForwardPass, RenderContext, ResourceCache};
+use elderforge_physics::DebugLayers;
+use elderforge_renderer::{DebugPass, ForwardPass, RenderContext, ResourceCache};
 use elderforge_scene::assets::{MaterialDef, MeshSource};
 use elderforge_scene::Scene;
 
 use elderforge::assets::AssetManager;
+use elderforge::debug_overlay::DebugOverlay;
 use elderforge::deformable::DeformableMeshes;
-use elderforge::demos::{Demo, DemoAssets};
+use elderforge::demos::{Demo, DemoAnim, DemoAssets};
 
 use crate::systems;
+
+/// Launch-time options parsed from the command line and threaded into the app.
+#[derive(Debug, Clone, Copy)]
+pub struct LaunchOptions {
+    /// Hide all editor chrome and clear to black — clean viewport for capture.
+    pub borderless: bool,
+    /// MSAA sample count for the forward pass (`1` disables it).
+    pub msaa: u32,
+}
+
+impl Default for LaunchOptions {
+    fn default() -> Self {
+        Self { borderless: false, msaa: 1 }
+    }
+}
 
 /// Physics runs at a fixed 120 Hz; clamp to 8 steps so a slow frame can't
 /// spiral.
@@ -30,6 +47,8 @@ pub struct Gpu {
     pub context: RenderContext,
     pub cache: ResourceCache,
     pub forward: ForwardPass,
+    /// Physics debug overlay pass (line + point pipelines, reused buffers).
+    pub debug: DebugPass,
     /// Per-frame meshes for the scene's soft bodies and cloth, rebuilt from
     /// particle positions each step.
     pub deformables: DeformableMeshes,
@@ -38,12 +57,22 @@ pub struct Gpu {
 pub struct App {
     pub scene: Scene,
     demo: Demo,
+    options: LaunchOptions,
     clock: Clock,
     fixed: FixedTimestep,
     gpu: Option<Gpu>,
     /// Created lazily alongside `gpu` (it needs the device, surface format, and
-    /// window). `None` until the first frame.
+    /// window). `None` until the first frame, and always `None` in borderless
+    /// capture mode (no editor chrome).
     editor: Option<EditorState>,
+    /// This demo's scripted per-frame animation (camera orbits, staged drops),
+    /// captured from `Demo::setup` and applied each frame with the sim time.
+    anim: DemoAnim,
+    /// Accumulated simulation time in seconds, advanced only while physics
+    /// steps; drives [`anim`](Self::anim).
+    sim_time: f32,
+    /// Bridges the physics debug data into renderer vertices; reused each frame.
+    debug_overlay: DebugOverlay,
     /// Decodes and memoizes file-backed assets; used to (re)build the GPU cache
     /// from a scene's asset table on startup and after a Load.
     asset_manager: AssetManager,
@@ -53,14 +82,18 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(demo: Demo) -> Self {
+    pub fn new(demo: Demo, options: LaunchOptions) -> Self {
         Self {
             scene: Scene::new(),
             demo,
+            options,
             clock: Clock::new(),
             fixed: FixedTimestep::new(1.0 / PHYSICS_HZ, MAX_STEPS_PER_FRAME),
             gpu: None,
             editor: None,
+            anim: DemoAnim::None,
+            sim_time: 0.0,
+            debug_overlay: DebugOverlay::new(),
             asset_manager: AssetManager::new(),
             last_frame_ms: 0.0,
             last_physics_ms: 0.0,
@@ -90,9 +123,10 @@ impl App {
             physics_time_ms: self.last_physics_ms,
         };
 
-        let Self { scene, gpu, editor, fixed, asset_manager, .. } = self;
+        let Self {
+            scene, gpu, editor, fixed, anim, sim_time, debug_overlay, asset_manager, ..
+        } = self;
         let gpu = gpu.as_mut().expect("gpu initialized above");
-        let editor = editor.as_mut().expect("editor initialized above");
 
         // Acquire the surface frame up front so the 3D pass and the egui pass
         // share one encoder and one present.
@@ -105,40 +139,74 @@ impl App {
             }
         };
 
-        // 1. Editor UI — reads/edits the scene, toggles the sim controls, and
-        //    records save/load requests in the toolbar.
-        let editor_frame = editor.run_frame(window.winit_window(), scene, stats);
-
-        // 2. Service the toolbar's scene save/load. Loading swaps in a new scene
-        //    and rebuilds the GPU cache from its asset table before anything
-        //    below renders it.
-        handle_scene_io(scene, gpu, editor, asset_manager);
-
-        // 3. Step physics according to the simulation controls. Pause stops the
-        //    stepping (but not the rendering below); Step advances exactly one
-        //    fixed tick; the multiplier scales simulated time; the substep slider
-        //    drives the solver's substep count.
-        let controls = &mut editor.editor.sim_controls;
-        let (playing, single_step, multiplier, substeps) = (
-            controls.playing,
-            std::mem::take(&mut controls.single_step_requested),
-            controls.timestep_multiplier,
-            controls.substeps,
-        );
+        // 1. Editor UI (windowed only) — reads/edits the scene, toggles the sim
+        //    controls, and records save/load requests in the toolbar. Borderless
+        //    capture has no editor: it just plays at the scene's own settings.
+        let editor_frame;
+        let (playing, single_step, multiplier, substeps);
+        match editor.as_mut() {
+            Some(editor) => {
+                editor_frame = Some(editor.run_frame(window.winit_window(), scene, stats));
+                // Service the toolbar's scene save/load. Loading swaps in a new
+                // scene and rebuilds the GPU cache before anything below renders.
+                handle_scene_io(scene, gpu, editor, asset_manager);
+                let controls = &mut editor.editor.sim_controls;
+                playing = controls.playing;
+                single_step = std::mem::take(&mut controls.single_step_requested);
+                multiplier = controls.timestep_multiplier;
+                substeps = controls.substeps;
+            }
+            None => {
+                editor_frame = None;
+                playing = true;
+                single_step = false;
+                multiplier = 1.0;
+                substeps = scene.physics.substeps;
+            }
+        }
         scene.physics.substeps = substeps;
 
+        // 2. Step physics. Pause stops stepping (but not rendering); Step
+        //    advances exactly one fixed tick; the multiplier scales simulated
+        //    time. Advance the sim clock by the work actually done, then run the
+        //    demo's scripted animation against it.
         let physics_start = Instant::now();
+        let mut steps = 0u32;
         if playing {
-            for _ in 0..fixed.integrate(frame_dt * multiplier) {
+            steps = fixed.integrate(frame_dt * multiplier);
+            for _ in 0..steps {
                 systems::physics::run(scene, fixed.target_dt());
             }
         } else if single_step {
             systems::physics::run(scene, fixed.target_dt());
+            steps = 1;
         }
         let physics_ms = physics_start.elapsed().as_secs_f32() * 1000.0;
+        *sim_time += steps as f32 * fixed.target_dt();
+        anim.apply(scene, *sim_time);
+
+        // 3. Rebuild the physics debug overlay for this frame from the enabled
+        //    editor toggles (no editor → all layers off → empty/cheap).
+        let layers = editor
+            .as_ref()
+            .map(|e| {
+                let o = &e.editor.overlays;
+                DebugLayers {
+                    collision_shapes: o.collision_shapes,
+                    velocity_vectors: o.velocity_vectors,
+                    angular_velocity: o.angular_velocity,
+                    contact_points: o.contact_points,
+                    constraint_anchors: o.constraint_anchors,
+                    bvh_aabbs: o.bvh_aabbs,
+                    sleep_state: o.sleep_state,
+                    force_accumulators: o.force_accumulators,
+                }
+            })
+            .unwrap_or_default();
+        debug_overlay.update(&scene.physics, layers);
 
         // 4. Restream the soft-body / cloth meshes from their post-step particle
-        //    positions, then render: 3D scene first, editor on top, then present.
+        //    positions, then render: 3D scene, debug overlay, editor; then present.
         gpu.deformables.update(&gpu.context.queue, &scene.physics);
         systems::render::record(
             scene,
@@ -146,17 +214,21 @@ impl App {
             &gpu.cache,
             &gpu.deformables,
             &mut gpu.forward,
+            &mut gpu.debug,
+            debug_overlay,
             &mut frame,
         );
         let (width, height) = gpu.context.size();
-        editor.paint(
-            &gpu.context.device,
-            &gpu.context.queue,
-            &mut frame.encoder,
-            &frame.view,
-            [width, height],
-            &editor_frame,
-        );
+        if let (Some(editor), Some(editor_frame)) = (editor.as_mut(), editor_frame.as_ref()) {
+            editor.paint(
+                &gpu.context.device,
+                &gpu.context.queue,
+                &mut frame.encoder,
+                &frame.view,
+                [width, height],
+                editor_frame,
+            );
+        }
         gpu.context.present(frame);
 
         // Remember this frame's timings for the stats panel to show next frame.
@@ -176,7 +248,18 @@ impl App {
     fn init(&mut self, window: &WindowHandle) -> anyhow::Result<()> {
         let (width, height) = window.size();
         let context = RenderContext::new(window.surface_provider(), width, height, window.vsync())?;
-        let forward = ForwardPass::new(&context.device, context.surface_format(), (width, height));
+        // Clamp the requested MSAA count to what this GPU/format actually
+        // supports, so e.g. `--msaa 8` falls back to 4× instead of crashing.
+        let samples = context.supported_sample_count(self.options.msaa);
+        if samples != self.options.msaa {
+            log::warn!(
+                "msaa {}x is unsupported for this surface; using {}x",
+                self.options.msaa,
+                samples
+            );
+        }
+        let mut forward =
+            ForwardPass::new(&context.device, context.surface_format(), (width, height), samples);
 
         // `SceneAssets` is the resource-handle authority: register the builtin
         // primitive meshes and the default material, hand the handles to the
@@ -188,8 +271,18 @@ impl App {
         let material = self.scene.assets.register_material(MaterialDef::default());
 
         let assets = DemoAssets { cube, sphere, capsule, plane, material };
-        self.demo.setup(&mut self.scene, &assets);
+        let config = self.demo.setup(&mut self.scene, &assets);
         log::info!("demo '{}': {} entities", self.demo.name(), self.scene.world.len());
+
+        // Apply the demo's optional key-light override, and (in borderless
+        // capture mode) clear to pure black instead of the editor sky.
+        if let Some(light) = config.light {
+            forward.set_light(light);
+        }
+        if self.options.borderless {
+            forward.set_clear_color(wgpu::Color::BLACK);
+        }
+        self.anim = config.anim;
 
         let cache = self
             .asset_manager
@@ -199,16 +292,24 @@ impl App {
         // Dynamic meshes for the demo's soft bodies / cloth (if any).
         let deformables = DeformableMeshes::build(&context.device, &self.scene.physics);
 
-        // The editor needs the device + surface format; create it here, then
-        // seed the substep slider with the scene's own substep count so it
-        // starts in agreement with the demo.
-        let mut editor =
-            EditorState::new(&context.device, context.surface_format(), window.winit_window());
-        editor.editor.sim_controls.substeps = self.scene.physics.substeps;
-        editor.editor.toolbar.status = format!("demo: {}", self.demo.name());
+        // Debug overlay pass renders single-sampled over the resolved surface.
+        let debug = DebugPass::new(&context.device, context.surface_format());
 
-        self.gpu = Some(Gpu { context, cache, forward, deformables });
-        self.editor = Some(editor);
+        // The editor exists only in windowed mode; borderless capture renders
+        // just the viewport. When present, seed its substep slider with the
+        // scene's own count so it starts in agreement with the demo.
+        let editor = if self.options.borderless {
+            None
+        } else {
+            let mut editor =
+                EditorState::new(&context.device, context.surface_format(), window.winit_window());
+            editor.editor.sim_controls.substeps = self.scene.physics.substeps;
+            editor.editor.toolbar.status = format!("demo: {}", self.demo.name());
+            Some(editor)
+        };
+
+        self.gpu = Some(Gpu { context, cache, forward, debug, deformables });
+        self.editor = editor;
         Ok(())
     }
 }

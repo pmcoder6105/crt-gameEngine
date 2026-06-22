@@ -5,6 +5,10 @@
 
 struct Globals {
     view_proj: mat4x4<f32>,
+    // Direction *toward* the light (world space) in xyz; w unused.
+    light_dir: vec4<f32>,
+    // Light color/tint in rgb; w unused.
+    light_color: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> globals: Globals;
 
@@ -45,10 +49,10 @@ fn fs_main(in: VsOut, @builtin(front_facing) front_facing: bool) -> @location(0)
     if (!front_facing) {
         n = -n;
     }
-    let light = normalize(vec3<f32>(0.3, 0.9, 0.35));
+    let light = normalize(globals.light_dir.xyz);
     let diffuse = clamp(dot(n, light), 0.0, 1.0);
     let shade = 0.35 + 0.65 * diffuse;
     // Tint by orientation so faces are distinguishable as objects tumble.
     let base = 0.5 + 0.5 * n;
-    return vec4<f32>(base * shade, 1.0);
+    return vec4<f32>(base * shade * globals.light_color.rgb, 1.0);
 }

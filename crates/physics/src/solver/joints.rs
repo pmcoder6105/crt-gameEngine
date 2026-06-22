@@ -569,6 +569,27 @@ impl Joint {
             Joint::Fixed(j) => (j.body_a, j.body_b),
         }
     }
+
+    /// The two local anchor offsets, in each body's local frame.
+    pub fn local_anchors(&self) -> (Vec3, Vec3) {
+        match self {
+            Joint::Ball(j) => (j.local_anchor_a, j.local_anchor_b),
+            Joint::Hinge(j) => (j.local_anchor_a, j.local_anchor_b),
+            Joint::Prismatic(j) => (j.local_anchor_a, j.local_anchor_b),
+            Joint::Fixed(j) => (j.local_anchor_a, j.local_anchor_b),
+        }
+    }
+
+    /// The two anchor points in world space, for debug visualization: each
+    /// body's local anchor transformed by that body's current pose.
+    pub fn world_anchors(&self, bodies: &[RigidBody]) -> (Vec3, Vec3) {
+        let (a, b) = self.bodies();
+        let (la, lb) = self.local_anchors();
+        (
+            bodies[a].position + bodies[a].rotation * la,
+            bodies[b].position + bodies[b].rotation * lb,
+        )
+    }
 }
 
 #[cfg(test)]

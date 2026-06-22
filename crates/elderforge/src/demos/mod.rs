@@ -9,10 +9,14 @@
 
 mod avalanche;
 mod cloth_drape;
+mod cloth_drape_showcase;
 mod cloth_flag;
+mod cloth_tear;
+mod mixed;
 mod pendulum;
 mod sandbox;
 mod soft_ball;
+mod softbody_drop;
 mod stacking;
 mod stress;
 
@@ -20,6 +24,7 @@ use elderforge_core::handles::{MaterialHandle, MeshHandle};
 use elderforge_core::math::{Mat4, Vec3};
 use elderforge_ecs::components::{Camera, Transform};
 use elderforge_physics::PhysicsMaterial;
+use elderforge_renderer::DirectionalLight;
 use elderforge_scene::Scene;
 
 /// Mesh and material handles shared across the demos, uploaded once by the
@@ -69,10 +74,23 @@ pub enum Demo {
     ClothFlag,
     /// A cloth sheet draped over a spinning cube — soft/rigid contact coupling.
     ClothDrape,
+    /// Capture-grade cloth drape: a 40×40 sheet pinned at two top corners over
+    /// a slowly rotating cube, lit warm, with the camera orbiting once per 30s.
+    ClothDrapeShowcase,
+    /// Three soft balls of increasing softness dropped onto a table in sequence.
+    SoftbodyDrop,
+    /// A cloth pinned along its top edge, taking a heavy sphere on its center.
+    ClothTear,
+    /// A combined scene: a cloth flag, a soft body rolling down a ramp, and a
+    /// rigid box stack it scatters — everything interacting at once.
+    Mixed,
 }
 
 impl Demo {
-    /// Parse the `--demo` value. Case-insensitive.
+    /// Parse the `--demo` value. Case-insensitive. The capture demos use
+    /// hyphenated canonical names (`cloth-drape`, `softbody-drop`, `cloth-tear`);
+    /// note `cloth-drape` is the 40×40 capture showcase, distinct from the older
+    /// `cloth_drape` (underscore) draping demo.
     pub fn from_name(name: &str) -> Option<Demo> {
         match name.trim().to_ascii_lowercase().as_str() {
             "stacking" => Some(Demo::Stacking),
@@ -83,6 +101,10 @@ impl Demo {
             "soft_ball" | "softball" => Some(Demo::SoftBall),
             "cloth_flag" | "clothflag" => Some(Demo::ClothFlag),
             "cloth_drape" | "clothdrape" => Some(Demo::ClothDrape),
+            "cloth-drape" | "clothdrapeshowcase" => Some(Demo::ClothDrapeShowcase),
+            "softbody-drop" | "softbody_drop" | "softbodydrop" => Some(Demo::SoftbodyDrop),
+            "cloth-tear" | "cloth_tear" | "clothtear" => Some(Demo::ClothTear),
+            "mixed" => Some(Demo::Mixed),
             _ => None,
         }
     }
@@ -98,11 +120,15 @@ impl Demo {
             Demo::SoftBall => "soft_ball",
             Demo::ClothFlag => "cloth_flag",
             Demo::ClothDrape => "cloth_drape",
+            Demo::ClothDrapeShowcase => "cloth-drape",
+            Demo::SoftbodyDrop => "softbody-drop",
+            Demo::ClothTear => "cloth-tear",
+            Demo::Mixed => "mixed",
         }
     }
 
     /// Every demo, for help text and exhaustive testing.
-    pub fn all() -> [Demo; 8] {
+    pub fn all() -> [Demo; 12] {
         [
             Demo::Stacking,
             Demo::Pendulum,
@@ -112,21 +138,124 @@ impl Demo {
             Demo::SoftBall,
             Demo::ClothFlag,
             Demo::ClothDrape,
+            Demo::ClothDrapeShowcase,
+            Demo::SoftbodyDrop,
+            Demo::ClothTear,
+            Demo::Mixed,
         ]
     }
 
-    /// Build this demo's scene: spawn the camera and all entities.
-    pub fn setup(self, scene: &mut Scene, assets: &DemoAssets) {
+    /// Build this demo's scene: spawn the camera and all entities. Returns the
+    /// demo's runtime configuration — any per-frame [animation](DemoAnim) and an
+    /// optional [key light](DirectionalLight) override.
+    pub fn setup(self, scene: &mut Scene, assets: &DemoAssets) -> DemoConfig {
         scene.name = self.name().to_string();
         match self {
-            Demo::Stacking => stacking::setup(scene, assets),
-            Demo::Pendulum => pendulum::setup(scene, assets),
-            Demo::Avalanche => avalanche::setup(scene, assets),
-            Demo::Sandbox => sandbox::setup(scene, assets),
-            Demo::Stress => stress::setup(scene, assets),
-            Demo::SoftBall => soft_ball::setup(scene, assets),
-            Demo::ClothFlag => cloth_flag::setup(scene, assets),
-            Demo::ClothDrape => cloth_drape::setup(scene, assets),
+            Demo::Stacking => stacking::setup(scene, assets).into(),
+            Demo::Pendulum => pendulum::setup(scene, assets).into(),
+            Demo::Avalanche => avalanche::setup(scene, assets).into(),
+            Demo::Sandbox => sandbox::setup(scene, assets).into(),
+            Demo::Stress => stress::setup(scene, assets).into(),
+            Demo::SoftBall => soft_ball::setup(scene, assets).into(),
+            Demo::ClothFlag => cloth_flag::setup(scene, assets).into(),
+            Demo::ClothDrape => cloth_drape::setup(scene, assets).into(),
+            Demo::ClothDrapeShowcase => cloth_drape_showcase::setup(scene, assets),
+            Demo::SoftbodyDrop => softbody_drop::setup(scene, assets),
+            Demo::ClothTear => cloth_tear::setup(scene, assets).into(),
+            Demo::Mixed => mixed::setup(scene, assets).into(),
+        }
+    }
+}
+
+/// Runtime configuration a demo's `setup` hands back to the app: a per-frame
+/// [animation](DemoAnim) (camera moves, staged releases) and an optional key
+/// [light](DirectionalLight) override. Demos with neither return the default.
+///
+/// Demo `setup` functions that need neither return `()`, lifted into the
+/// default via `.into()` at the dispatch site.
+#[derive(Default)]
+pub struct DemoConfig {
+    pub anim: DemoAnim,
+    pub light: Option<DirectionalLight>,
+}
+
+impl From<()> for DemoConfig {
+    fn from(_: ()) -> Self {
+        DemoConfig::default()
+    }
+}
+
+impl From<DemoAnim> for DemoConfig {
+    fn from(anim: DemoAnim) -> Self {
+        DemoConfig { anim, ..DemoConfig::default() }
+    }
+}
+
+/// Per-frame demo animation, applied by the app with the running simulation
+/// time. Most demos are purely physics-driven and use [`DemoAnim::None`].
+#[derive(Default)]
+pub enum DemoAnim {
+    /// No scripted motion; the simulation drives everything.
+    #[default]
+    None,
+    /// Orbit the active camera around `center` on a circle of `radius` at a
+    /// fixed `height`, completing one revolution every `period` seconds.
+    OrbitCamera {
+        center: Vec3,
+        radius: f32,
+        height: f32,
+        period: f32,
+    },
+    /// Release pinned soft bodies on a schedule: each entry restores its
+    /// particles' inverse masses once the sim time reaches `release_at`, so a
+    /// body held frozen in the air begins to fall on cue.
+    StagedDrop(Vec<StagedRelease>),
+}
+
+/// One soft body in a [`DemoAnim::StagedDrop`]: the contiguous particle run to
+/// release and the time to release it. Until `release_at`, the body sits frozen
+/// (its particles pinned with zero inverse mass at setup); at release the saved
+/// `inv_masses` are restored and gravity takes over.
+pub struct StagedRelease {
+    /// First particle index of the body in the world's particle array.
+    pub base: usize,
+    /// Inverse masses to restore, one per particle from `base`.
+    pub inv_masses: Vec<f32>,
+    /// Simulation time (seconds) at which to release the body.
+    pub release_at: f32,
+}
+
+impl DemoAnim {
+    /// Apply the animation for the current simulation time. Cheap and idempotent
+    /// (a released body just has its masses re-set to the same values).
+    pub fn apply(&self, scene: &mut Scene, time: f32) {
+        match self {
+            DemoAnim::None => {}
+            DemoAnim::OrbitCamera { center, radius, height, period } => {
+                let theta = std::f32::consts::TAU * time / period.max(1e-3);
+                let eye = *center + Vec3::new(radius * theta.cos(), *height, radius * theta.sin());
+                let world = Mat4::look_at_rh(eye, *center, Vec3::Y).inverse();
+                let (_, rotation, position) = world.to_scale_rotation_translation();
+                for (_e, (camera, transform)) in
+                    scene.world.query_mut::<(&Camera, &mut Transform)>()
+                {
+                    if camera.is_active {
+                        transform.position = position;
+                        transform.rotation = rotation;
+                        break;
+                    }
+                }
+            }
+            DemoAnim::StagedDrop(releases) => {
+                let particles = scene.physics.particles_mut();
+                for release in releases {
+                    if time >= release.release_at {
+                        for (i, &w) in release.inv_masses.iter().enumerate() {
+                            particles[release.base + i].inv_mass = w;
+                        }
+                    }
+                }
+            }
         }
     }
 }

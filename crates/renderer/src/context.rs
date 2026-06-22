@@ -117,6 +117,35 @@ impl RenderContext {
         self.surface_config.format
     }
 
+    /// Clamp a requested MSAA sample count down to the highest power-of-two at
+    /// or below it that this adapter supports for the surface format (and the
+    /// depth format). Always returns at least `1`. Lets the caller ask for `8`
+    /// and transparently fall back to `4` on a device that tops out there,
+    /// instead of tripping a pipeline-creation validation error.
+    pub fn supported_sample_count(&self, requested: u32) -> u32 {
+        use wgpu::TextureFormatFeatureFlags as F;
+        let color = self.adapter.get_texture_format_features(self.surface_format()).flags;
+        let depth = self
+            .adapter
+            .get_texture_format_features(crate::pipeline::DEPTH_FORMAT)
+            .flags;
+        let supported = |n: u32| {
+            let flag = match n {
+                1 => return true,
+                2 => F::MULTISAMPLE_X2,
+                4 => F::MULTISAMPLE_X4,
+                8 => F::MULTISAMPLE_X8,
+                16 => F::MULTISAMPLE_X16,
+                _ => return false,
+            };
+            color.contains(flag) && depth.contains(flag)
+        };
+        [16u32, 8, 4, 2, 1]
+            .into_iter()
+            .find(|&c| c <= requested.max(1) && supported(c))
+            .unwrap_or(1)
+    }
+
     /// Current surface size in physical pixels.
     pub fn size(&self) -> (u32, u32) {
         (self.surface_config.width, self.surface_config.height)

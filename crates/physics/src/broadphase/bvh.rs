@@ -251,6 +251,25 @@ impl Bvh {
         self.free.push(node);
     }
 
+    /// Every node's AABB paired with its depth (root = 0), for debug overlays
+    /// that color the tree by level. Includes both internal nodes and leaves.
+    pub fn debug_iter_levels(&self) -> Vec<(Aabb, usize)> {
+        let mut out = Vec::new();
+        if self.root == NIL {
+            return out;
+        }
+        let mut stack = vec![(self.root, 0usize)];
+        while let Some((n, depth)) = stack.pop() {
+            let node = &self.nodes[n as usize];
+            out.push((node.aabb, depth));
+            if let NodeKind::Internal { left, right } = node.kind {
+                stack.push((left, depth + 1));
+                stack.push((right, depth + 1));
+            }
+        }
+        out
+    }
+
     /// All internal-node AABBs, for debug visualization of the tree structure.
     pub fn debug_iter_aabbs(&self) -> impl Iterator<Item = Aabb> {
         let mut boxes = Vec::new();

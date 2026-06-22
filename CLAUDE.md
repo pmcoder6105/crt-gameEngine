@@ -536,6 +536,81 @@ cargo test               # run all unit + integration tests
   shoves a dynamic body) plus soft/cloth unit tests; `demos_render` now exercises
   all 8 demos with deformables and asserts particle finiteness; all three new
   demos verified clean under `--smoke-test`. Full workspace green (151 tests).
+- Completed: demo-capture tooling (phase 14). Two launch flags + four
+  footage-grade demos + a configurable key light. **`--borderless`**: hides all
+  editor chrome and clears to pure black, rendering just the viewport. The app
+  creates no `EditorState` in this mode (`editor: None`), so `update` runs a
+  unified path that plays at the scene's own settings (no sim controls), skips
+  the egui pass, and `ForwardPass::set_clear_color(BLACK)`; the binary also
+  drops OS window decorations via a new `WindowConfig.decorations` (winit
+  `with_decorations`). **`--msaa <N>`** (1/2/4/8, validated): `PipelineBuilder`
+  gained `.sample_count()` and `ForwardPass::new` a `sample_count` arg — it
+  renders into a multisampled color+depth target and resolves into the surface
+  view (egui then paints over the resolved single-sample view). Unsupported
+  counts don't crash: `RenderContext::supported_sample_count` queries the
+  adapter's `MULTISAMPLE_X{2,4,8,16}` flags (color ∩ depth) and the app clamps
+  down (e.g. 8×→4× on this Metal surface) with a warning. **Per-demo runtime
+  config**: `Demo::setup` now returns a `DemoConfig { anim: DemoAnim, light:
+  Option<DirectionalLight> }` (demos needing neither return `()`, lifted via
+  `From<()>`). `DemoAnim` is applied each frame by the app against an
+  accumulated `sim_time`: `OrbitCamera` rewrites the active camera's `Transform`
+  on a circle; `StagedDrop` restores saved particle inverse masses at a release
+  time (needs the new `PhysicsWorld::particles_mut`). The **light** is a new
+  `forward.wgsl` uniform — `Globals` grew `light_dir`/`light_color` vec4s
+  (uniform now 96 B, visibility VERTEX_FRAGMENT); the default
+  (`DirectionalLight::default`, dir (0.3,0.9,0.35), white) reproduces the old
+  hard-coded look exactly, so only demos that override it change. The four new
+  demos (`--demo <name>`, hyphenated canonical names; all default to 1920×1080):
+  **cloth-drape** (a 40×40 sheet pinned at two top corners draping over a slowly
+  Y-spinning cube, warm key light from upper-left, camera orbiting once per
+  30 s) — note this is distinct from the older underscore `cloth_drape`;
+  **softbody-drop** (three soft balls of increasing compliance frozen in air
+  then released onto a table at 0/2/4 s — the squashiest pancakes; fixed angled
+  camera); **cloth-tear** (a curtain pinned along its whole top edge taking a
+  heavy 50 kg sphere on its center — tearing isn't implemented, so it shows
+  extreme stretch via compliant structural springs); **mixed** (a soft ball
+  launched down a slick ramp scattering a 5-box stack, beside a wind-blown cloth
+  flag). `demos_render` now exercises all 12 demos (the 4 new ones 56–95% lit);
+  full workspace suite green, and all four verified clean under
+  `--demo <name> --borderless --msaa 4 --smoke-test` at 1920×1080.
+- Completed: physics debug overlay pass (phase 15). A toggle-able, layered
+  visualization of physics state rendered on top of the 3D scene. **Physics
+  side** (`physics/src/debug.rs`): `DebugDraw { lines: Vec<DebugLine>, points:
+  Vec<DebugPoint> }` (cleared/refilled in place each frame — capacity reused, no
+  steady-state alloc) with geometry builders on it (`wire_box`/`wire_aabb`/
+  `wire_sphere`/`wire_capsule`/`arrow`/`arc`/`marker`), and `DebugLayers` (eight
+  bools, mirrors the editor toggles). `PhysicsWorld::emit_debug(layers, &mut
+  out)` fills only the enabled layers: **collision shapes** (collider wireframe
+  colored by `BodyKind`), **velocity vectors** (arrow length ∝ speed),
+  **angular velocity** (an arc around the spin axis), **contact points** (a
+  marker sphere + center point + normal arrow — recomputed from a fresh
+  broadphase/narrowphase so it's correct even while the scene sleeps, ignoring
+  the solver's sleep short-circuit), **constraint anchors** (cube markers +
+  connection lines for distance constraints and all four joint types, via the
+  new `Joint::world_anchors`), **BVH AABBs** (every node, colored by depth via
+  the new `Bvh::debug_iter_levels` → red root → blue leaves), **sleep state**
+  (dynamic-body wireframe, sleeping bodies dimmed/low-alpha), and **force
+  accumulators** (arrow of net external force m·g from the CoM). Contacts/BVH
+  share one finite-body broadphase build, gated on either layer being on.
+  **Renderer side** (`renderer/src/passes/debug.rs`): `DebugPass` with two
+  pipelines — a **line-list** and a **point-list** — sharing `debug.wgsl` and a
+  camera uniform; a `DebugVertex { position, color }` (`Pod`); and a `GrowBuffer`
+  that **reuses** its GPU vertex buffer across frames, growing only when a frame
+  exceeds capacity. It renders single-sampled `LoadOp::Load` over the resolved
+  surface (no MSAA/no depth — overlays sit on top), so it composes after the
+  forward pass regardless of the scene's sample count. **Bridge**
+  (`elderforge::debug_overlay::DebugOverlay`, in the lib like `deformable`):
+  owns the physics `DebugDraw` + reusable renderer-vertex lists, converting
+  Vec3 lines/points → flat `DebugVertex` arrays each frame. **Wiring**: the
+  editor `Overlays` panel now has the eight matching checkboxes (+ "Clear all");
+  `App` maps them into `DebugLayers`, calls `DebugOverlay::update` after the
+  physics step, and `systems::render::record` draws the overlay right after the
+  forward pass under the same camera (borderless capture has no editor → all
+  layers off → empty/cheap). Tests: physics `debug.rs` unit tests (6) +
+  `tests/debug_overlay.rs` (8, one per-layer + clear/reuse), and a headless GPU
+  `tests/debug_render.rs` that emits every layer and reads back the overlay over
+  black (4.6k lit px; dumps `$TMPDIR/elderforge_debug_overlay.ppm`). Full
+  workspace suite green; verified live in windowed and borderless+MSAA runs.
 - Next: angular contact response (contacts are still linear-only — fine for
   centered/axis-aligned cases, but a box can't yet tip over a contact edge or
   pick up spin from an off-center hit), persistent BVH refit inside the world
@@ -781,3 +856,73 @@ solid meshes (their back faces are occluded). A `PhysicsWorld::wind` field (a
 uniform acceleration applied only to particles) was added so the flag billows —
 a flat sheet pinned at two corners at its natural width is taut and otherwise
 just hangs flat.
+
+2026-06-21 — `--borderless` means "no editor chrome", not just a frameless OS
+window. In borderless mode the app constructs NO `EditorState` (`editor: None`);
+`update` branches on `editor.as_mut()` so the editorless path always plays at
+the scene's own substeps/timestep, skips the egui pass entirely, and clears to
+black. (It also turns off OS window decorations via the new
+`WindowConfig.decorations`, but the defining behavior is the absent editor.)
+Sim controls only exist when the editor does, so a borderless capture can't be
+paused — intended.
+
+2026-06-21 — MSAA lives in the forward pass, not the surface: `ForwardPass`
+renders into an owned multisampled color+depth target and RESOLVES into the
+single-sample surface view, so egui (which has no MSAA) paints over the resolved
+view unchanged. The CLI accepts 1/2/4/8 but the app clamps to
+`RenderContext::supported_sample_count` (adapter `MULTISAMPLE_X*` flags, color ∩
+depth) BEFORE building the pipeline — wgpu treats an unsupported sample count as
+a fatal validation error, so the clamp (8×→4× on this Metal surface, logged)
+must happen up front, never as a fallback after a failed pipeline build.
+
+2026-06-21 — `Demo::setup` returns a `DemoConfig { anim, light }` instead of
+`()`; demos with neither lift `()` via `From<()>`. Per-frame demo motion goes
+through `DemoAnim` applied by the app against an accumulated `sim_time` (so it
+pauses when physics pauses): `OrbitCamera` overwrites the active camera entity's
+`Transform` each frame, and `StagedDrop` releases soft bodies by restoring saved
+particle inverse masses at a release time — the bodies are spawned then PINNED
+(zero inv_mass) at setup, hanging frozen until their cue, which is why
+`PhysicsWorld::particles_mut` was added. This keeps all timed behavior out of
+the physics crate and in the demo/app layer.
+
+2026-06-21 — The key light is a forward-pass uniform, not per-material. `Globals`
+(group 0) grew `light_dir`/`light_color` vec4s (uniform 64→96 B, visibility
+VERTEX→VERTEX_FRAGMENT); `ForwardPass::set_light` writes it each frame.
+`DirectionalLight::default` (dir (0.3,0.9,0.35), white) reproduces the previous
+hard-coded shader light EXACTLY (same `0.35 + 0.65·diffuse` shade, same
+orientation tint), so every demo that doesn't override it looks identical to
+before — only `cloth-drape` sets a warm upper-left light.
+
+2026-06-21 — The capture demos use HYPHENATED canonical names (`cloth-drape`,
+`softbody-drop`, `cloth-tear`, `mixed`) and `from_name` matches them as exact
+lowercased strings — it deliberately does NOT normalize `-`↔`_`, because
+`cloth-drape` (the new 40×40 capture showcase) and `cloth_drape` (the older
+spinning-cube drape from phase 13) are DIFFERENT demos that must stay
+distinguishable. Underscore spellings of the other three are accepted as
+aliases since they don't collide.
+
+2026-06-21 — The physics debug overlay is a self-contained per-frame emit, not
+solver instrumentation: `PhysicsWorld::emit_debug` recomputes whatever a layer
+needs (it rebuilds a BVH and re-runs narrowphase for the contact layer) rather
+than retaining the solver's per-substep scratch. This keeps the hot path
+untouched and, crucially, makes the contact/BVH overlays correct even while the
+scene SLEEPS (the solver's `generate_contacts` short-circuits to zero work when
+nothing is awake; the debug path ignores that). The cost is duplicated
+broadphase/narrowphase, but only when a layer is enabled — an inspection-time
+expense, not a runtime one.
+
+2026-06-21 — The renderer crate stays independent of the physics crate: the
+debug `DebugPass` consumes its own `DebugVertex`, and the
+`elderforge::debug_overlay::DebugOverlay` bridge (in the binary's lib half,
+alongside `deformable`) converts physics `DebugLine`/`DebugPoint` → renderer
+vertices. "Don't allocate per-frame" holds at three levels: the physics
+`DebugDraw` Vecs, the bridge's vertex Vecs, and the pass's GPU `GrowBuffer` are
+all cleared/reused, growing only when a frame's geometry exceeds capacity.
+
+2026-06-21 — The debug overlay renders SINGLE-SAMPLED, `LoadOp::Load`, no depth,
+over the already-RESOLVED surface — deliberately on top of the scene, not
+depth-tested into it. This sidesteps sharing the forward pass's multisampled
+color/depth targets (the overlay would otherwise need to render into the MSAA
+target before resolve) and matches the "overlay on top" intent: a velocity
+vector behind a box is still visible. Frame order is forward (→resolve) → debug
+→ egui, all writing the one surface texture.

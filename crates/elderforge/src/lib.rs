@@ -5,5 +5,6 @@
 //! in the binary (`main.rs`).
 
 pub mod assets;
+pub mod debug_overlay;
 pub mod deformable;
 pub mod demos;
